@@ -1,0 +1,13 @@
+name: osmotool
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - diamond>=2.1
+  - prodigal>=2.6
+  - pandas>=1.5
+  - pip
+  # After activating: pip install -e .  (or pip install osmotool)
+  # Dev extras:
+  # pip install -e ".[dev]"   →  adds pytest, pytest-cov
