@@ -175,9 +175,14 @@ class TestComputeRpkm:
 # ---------------------------------------------------------------------------
 
 class TestEstimateFamilyLengths:
+    # protein_lengths is keyed by the *query* protein ID (the assembly's own
+    # Prodigal-called ORF), never by the reference database subject ID it
+    # aligned to -- see runners.py: parse_protein_lengths() parses the query
+    # proteins file, not the reference db. A dict keyed by sseqid here would
+    # never match and RPKM would silently fall back to RPM every time.
     def test_single_hit(self):
         best = {"r1": _row("r1", "ectA|P1|Org")}
-        prot_lens = {"ectA|P1|Org": 200}
+        prot_lens = {"r1": 200}
         lengths = estimate_family_lengths(best, prot_lens)
         assert lengths["ectA"] == pytest.approx(200.0)
 
@@ -186,7 +191,7 @@ class TestEstimateFamilyLengths:
             "r1": _row("r1", "ectA|P1|Org"),
             "r2": _row("r2", "ectA|P2|Org"),
         }
-        prot_lens = {"ectA|P1|Org": 100, "ectA|P2|Org": 200}
+        prot_lens = {"r1": 100, "r2": 200}
         lengths = estimate_family_lengths(best, prot_lens)
         assert lengths["ectA"] == pytest.approx(150.0)
 
@@ -200,7 +205,17 @@ class TestEstimateFamilyLengths:
             "r1": _row("r1", "ectA|P1|Org"),
             "r2": _row("r2", "ectB|P2|Org"),
         }
-        prot_lens = {"ectA|P1|Org": 120, "ectB|P2|Org": 360}
+        prot_lens = {"r1": 120, "r2": 360}
         lengths = estimate_family_lengths(best, prot_lens)
         assert lengths["ectA"] == pytest.approx(120.0)
         assert lengths["ectB"] == pytest.approx(360.0)
+
+    def test_reference_id_keyed_dict_never_matches(self):
+        """Regression test for the RPKM bug: protein_lengths keyed by the
+        reference/subject ID (the pre-fix, wrong assumption) must produce no
+        length data at all, not a lucky match -- confirms the lookup really
+        uses qseqid, not sseqid."""
+        best = {"r1": _row("r1", "ectA|P1|Org")}
+        prot_lens = {"ectA|P1|Org": 200}  # keyed by sseqid, not qseqid
+        lengths = estimate_family_lengths(best, prot_lens)
+        assert "ectA" not in lengths

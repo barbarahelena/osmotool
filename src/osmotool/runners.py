@@ -257,6 +257,7 @@ def run_annotate(
     keep_aln: bool = False,
     keep_proteins: bool = False,
     tmpdir: str | None = None,
+    exclude_families: str | None = None,
 ) -> dict[str, tuple[Path, Path]]:
     """
     Annotate an assembly (or pre-called proteins) against osmodiamond.
@@ -288,6 +289,17 @@ def run_annotate(
     hit the identical scale-mismatch problem HMM's GA cutoffs have on
     short reads (see run_hmmscan's docstring) -- a short read can never
     reach a bitscore calibrated against full-length sequences.
+
+    exclude_families:
+        Optional path to osmo_refdb's <release>.annotate_excluded_families.txt
+        -- currently just decoy references (families.yaml:
+        decoy_from_negatives, e.g. betL_decoy), which must never appear as
+        a reported gene family in either mode. Those sequences are still
+        searched normally (that's the whole point -- they need to be able
+        to win DIAMOND's best-hit contest away from a mislabeled call);
+        this only drops them from the reported gene_counts.tsv. Unlike
+        `profile`'s exclude_families, annotate_only families (e.g. murB)
+        are deliberately NOT in this list -- they should stay visible here.
 
     Returns
     -------
@@ -346,6 +358,7 @@ def run_annotate(
             alignments, protein_lengths, total_proteins, db=str(db),
             min_identity=min_identity, min_query_cover=min_query_cover,
             min_subject_cover=min_subject_cover, evalue=evalue,
+            exclude_families=exclude_families,
         )
         if not keep_aln:
             aln_file.unlink(missing_ok=True)
@@ -360,6 +373,7 @@ def run_annotate(
             "hmm", out_prefix if method == "hmm" else f"{out_prefix}.hmm",
             hmm_alignments, protein_lengths, total_proteins, db=str(hmm_db),
             min_identity=None, min_query_cover=None, min_subject_cover=None, evalue=None,
+            exclude_families=exclude_families,
         )
         if not keep_aln:
             hmm_aln_file.unlink(missing_ok=True)
@@ -389,6 +403,7 @@ def _finish_annotate_method(
     min_query_cover: float | None,
     min_subject_cover: float | None,
     evalue: float | None,
+    exclude_families: str | None = None,
 ) -> tuple[Path, Path]:
     """Shared best-hit selection / counting / RPKM / output-writing tail for
     one annotate method (diamond or hmm), factored out since both methods
@@ -399,6 +414,9 @@ def _finish_annotate_method(
 
     # annotate mode: single-end proteins (no paired weighting)
     counts = count_hits(best_hits, paired=False)
+    if exclude_families is not None:
+        excluded = load_excluded_families(exclude_families)
+        counts = {fam: cnt for fam, cnt in counts.items() if fam not in excluded}
 
     # RPKM using mean hit-subject protein lengths
     family_lengths_aa = estimate_family_lengths(best_hits, protein_lengths)

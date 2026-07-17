@@ -58,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
                 keep_aln=args.keep_aln,
                 keep_proteins=args.keep_proteins,
                 tmpdir=args.tmpdir,
+                exclude_families=args.exclude_families,
             )
 
     except (FileNotFoundError, ValueError, RuntimeError) as exc:

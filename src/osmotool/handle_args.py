@@ -238,6 +238,18 @@ def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:
         "--keep_proteins", action="store_true", default=False,
         help="Keep the Prodigal protein FASTA (ignored when --proteins is given).",
     )
+    p.add_argument(
+        "--exclude_families", default=None, metavar="OSMO_REFDB.ANNOTATE_EXCLUDED_FAMILIES.TXT",
+        help="Path to osmo_refdb's <release>.annotate_excluded_families.txt "
+             "(currently just decoy references, e.g. betL_decoy -- "
+             "families.yaml: decoy_from_negatives -- which exist purely to "
+             "win DIAMOND's best-hit contest away from a mislabeled call "
+             "and must never appear as a reported gene family). Those "
+             "sequences are still searched normally; this only drops them "
+             "from the reported gene_counts.tsv. Note this is a different "
+             "file from `profile`'s --exclude_families: annotate_only "
+             "families like murB stay visible here.",
+    )
 
     _add_filter_args(p)
     _add_output_args(p)

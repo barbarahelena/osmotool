@@ -66,13 +66,40 @@ osmotool profile \
   --threads 8
 ```
 
+With the DIAMOND+HMM cascade (a second HMM opinion on families with
+demonstrated DIAMOND precision problems) and scope-excluded families
+hidden from the report:
+
+```bash
+osmotool profile \
+  /path/to/osmodiamond.dmnd \
+  -1 sample_R1.fastq.gz -2 sample_R2.fastq.gz \
+  --out_prefix results/sample \
+  --hmm_db /path/to/osmo_refdb.hmm \
+  --cascade_config /path/to/osmo_refdb.profile_cascade.tsv \
+  --exclude_families /path/to/osmo_refdb.profile_excluded_families.txt \
+  --threads 8
+```
+
 ### Annotate assembly
 
 ```bash
-# With Prodigal ORF prediction (default):
+# HMM (default method) with Prodigal ORF prediction:
 osmotool annotate \
   /path/to/osmodiamond.dmnd \
   assembly.fasta \
+  --hmm_db /path/to/osmo_refdb.hmm \
+  --out_prefix results/assembly \
+  --threads 8
+
+# DIAMOND instead (avoids the HMMER dependency), with a per-family
+# specificity gate and decoy references hidden from the report:
+osmotool annotate \
+  /path/to/osmodiamond.dmnd \
+  assembly.fasta \
+  --method diamond \
+  --diamond_cutoffs /path/to/osmo_refdb.diamond_cutoffs.tsv \
+  --exclude_families /path/to/osmo_refdb.annotate_excluded_families.txt \
   --out_prefix results/assembly \
   --threads 8
 
@@ -81,6 +108,7 @@ osmotool annotate \
   /path/to/osmodiamond.dmnd \
   assembly.fasta \
   --proteins assembly_proteins.faa \
+  --hmm_db /path/to/osmo_refdb.hmm \
   --out_prefix results/assembly \
   --threads 8
 ```
@@ -116,11 +144,19 @@ for true RPKM.
 |---|---|---|
 | `--min_identity` | 0.80 | Min fractional sequence identity |
 | `--min_query_cover` | 0.80 | Min query coverage |
-| `--min_seqlen` | 45 | Min aligned length (bp) |
+| `--min_subject_cover` | 0.0 (off) | Min fraction of the matched *reference* protein a hit must cover. Off by default (a short read is always much shorter than most full-length references) — raise cautiously (e.g. 0.1-0.3) to filter hits that only cover a small fused-in domain of a much longer multi-domain reference protein |
+| `--min_seqlen` | 45 | Min aligned length (bp) (`profile`; `--min_seqlen` there is in amino acids — see `osmotool profile --help`) |
 | `--evalue` | 1e-5 | Max e-value |
 | `--threads` | 4 | Threads for DIAMOND |
 | `--tmpdir` | `$TMPDIR` | Temp directory for merged paired-end FASTQ |
 | `--total_reads` | *(counted)* | Skip read counting when count is already known |
+| `--method` | `hmm` (annotate only) | `diamond`, `hmm`, or `both`. `profile` is DIAMOND-only (HMM's GA cutoffs don't apply to short read fragments); `annotate` defaults to HMM since it's meaningfully more specific on full-length ORFs |
+| `--hmm_db` | none | Path to the pressed reference HMM database (`osmo_refdb.hmm` + `.h3*` indices). Required for `--method hmm`/`both` (`annotate`), or together with `--cascade_config` (`profile`) |
+| `--cascade_config` | none | `profile` only. Path to `<release>.profile_cascade.tsv`: reads whose DIAMOND call lands on a family with demonstrated precision problems get a second opinion from `hmmscan` before being kept. Requires `--hmm_db`, plus `orfm`+`hmmscan` on PATH |
+| `--diamond_cutoffs` | none | `annotate` only. Path to `<release>.diamond_cutoffs.tsv`: per-family minimum DIAMOND bitscore, giving DIAMOND calls a specificity gate analogous to HMM's GA cutoff |
+| `--exclude_families` | none | Path to a release's excluded-families list (`profile`: `<release>.profile_excluded_families.txt`; `annotate`: `<release>.annotate_excluded_families.txt` — different files). Those families/labels are still searched normally; this only drops them from the reported `gene_counts.tsv` |
+| `--proteins` | none | `annotate` only. Pre-called protein FASTA (skip Prodigal) |
+| `--keep_aln` / `--keep_proteins` | off | Retain intermediate alignment/protein files instead of deleting them after the run |
 
 ## HPC usage
 

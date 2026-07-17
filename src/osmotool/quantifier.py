@@ -253,7 +253,12 @@ def estimate_family_lengths(
     best_hits:
         Output of :func:`select_best_hits`.
     protein_lengths:
-        {protein_id: length_aa} from :func:`~osmotool.functions.parse_protein_lengths`.
+        {protein_id: length_aa} from :func:`~osmotool.functions.parse_protein_lengths`,
+        keyed by the *query* protein ID (the assembly's own Prodigal-called
+        ORF, not the reference database subject it aligned to) -- RPKM
+        normalises by the length of the gene actually found in the genome
+        being annotated, not by the length of whichever reference protein
+        it happened to match.
 
     Returns
     -------
@@ -261,10 +266,10 @@ def estimate_family_lengths(
     """
     family_lens: dict[str, list[int]] = defaultdict(list)
     for row in best_hits.values():
-        prot_id = row["sseqid"]
-        family = gene_family_from_header(prot_id)
-        if prot_id in protein_lengths:
-            family_lens[family].append(protein_lengths[prot_id])
+        query_id = row["qseqid"]
+        family = gene_family_from_header(row["sseqid"])
+        if query_id in protein_lengths:
+            family_lens[family].append(protein_lengths[query_id])
     return {
         fam: sum(lens) / len(lens)
         for fam, lens in family_lens.items()
