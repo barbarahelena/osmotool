@@ -40,6 +40,20 @@ docker pull ghcr.io/barbarahelena/osmotool:latest
 singularity pull docker://ghcr.io/barbarahelena/osmotool:latest
 ```
 
+## Reference database
+
+`osmotool` needs a reference DIAMOND database (`--database`, `.dmnd`) and,
+for HMM-based detection (`annotate`'s default, or `profile`'s optional
+cascade), a pressed HMM database (`--hmm_db`, `.hmm` + `.h3*` indices).
+These are built and benchmarked separately by
+[`osmo_refdb`](https://github.com/barbarahelena/osmo_refdb) — download the
+latest release from Zenodo:
+
+**v5** — DOI: [10.5281/zenodo.21420253](https://doi.org/10.5281/zenodo.21420253)
+
+Cite this DOI (alongside `osmotool` itself) in any publication using these
+results.
+
 ## Usage
 
 ### Profile reads (FASTQ)
