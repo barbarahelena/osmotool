@@ -11,7 +11,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="osmotool",
         description=(
-            "Screen osmoadaptation genes in metagenomic datasets using DIAMOND. "
+            "Screen osmoadaptation genes in metagenomic datasets using DIAMOND "
+            "and HMMER. "
             "Gene families: ectA, ectB, ectC (ectoine), betL (betaine transport), "
             "kdpA (K⁺ uptake), nhaA (Na⁺/H⁺ antiporter)."
         ),

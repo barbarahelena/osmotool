@@ -1,6 +1,6 @@
 # osmotool
 
-Screen osmoadaptation genes in metagenomic datasets using [DIAMOND](https://github.com/bbuchfink/diamond).
+Screen osmoadaptation genes in metagenomic datasets using [DIAMOND](https://github.com/bbuchfink/diamond) and [HMMER](http://hmmer.org/).
 
 ## Overview
 
@@ -8,8 +8,8 @@ Screen osmoadaptation genes in metagenomic datasets using [DIAMOND](https://gith
 
 | Subcommand | Input | Method |
 |---|---|---|
-| `profile` | FASTQ reads (paired or single-end) | `diamond blastx` (6-frame translation) |
-| `annotate` | Assembly FASTA (or pre-called proteins) | Prodigal → `diamond blastp` |
+| `profile` | FASTQ reads (paired or single-end) | `diamond blastx` (6-frame translation), optionally with a DIAMOND+HMM cascade (`--cascade`) |
+| `annotate` | Assembly FASTA (or pre-called proteins) | Prodigal → `hmmscan --cut_ga` (default), or `diamond blastp` (`--method diamond`) |
 
 Both modes produce per-gene raw counts and RPKM abundances.
 
