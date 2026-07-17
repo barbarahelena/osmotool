@@ -99,7 +99,7 @@ def run_profile(
     check_tool("diamond")
     if cascade_config is not None:
         if hmm_db is None:
-            raise ValueError("--hmm_db is required when --cascade_config is given")
+            raise ValueError("hmm_db is required when cascade_config is given")
         check_tool("orfm")
         check_tool("hmmscan")
 
@@ -308,7 +308,7 @@ def run_annotate(
     if method not in ("diamond", "hmm", "both"):
         raise ValueError(f"Unknown method '{method}': expected diamond, hmm, or both")
     if method in ("hmm", "both") and hmm_db is None:
-        raise ValueError("--hmm_db is required when --method is 'hmm' or 'both'")
+        raise ValueError("hmm_db is required when method is 'hmm' or 'both'")
 
     if method in ("diamond", "both"):
         check_tool("diamond")

@@ -115,8 +115,12 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
-        "db", metavar="DIAMOND_DB",
-        help="Path to the osmodiamond DIAMOND database (.dmnd).",
+        "database", metavar="DATABASE",
+        help="Path to an unpacked osmo_refdb release directory (e.g. "
+             "releases/v5/). osmotool finds osmo_refdb.dmnd, "
+             "hmms/osmo_refdb.hmm, osmo_refdb.profile_cascade.tsv, and "
+             "osmo_refdb.profile_excluded_families.txt inside it by their "
+             "fixed names -- no need to point at each file separately.",
     )
 
     reads = p.add_argument_group("reads (paired-end or single-end)")
@@ -144,30 +148,16 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
 
     cascade = p.add_argument_group("DIAMOND+HMM cascade (optional)")
     cascade.add_argument(
-        "--cascade_config", default=None, metavar="OSMO_REFDB.PROFILE_CASCADE.TSV",
-        help="Path to osmo_refdb's <release>.profile_cascade.tsv. When "
-             "given (with --hmm_db), reads whose DIAMOND call lands on a "
-             "family flagged there (real, demonstrated precision "
-             "problems, e.g. betL vs betT/CaiT) get a second opinion from "
-             "hmmscan using a short-read-calibrated threshold before the "
-             "call is kept -- only that flagged subset pays the extra "
-             "cost, not the whole dataset. DIAMOND's GA-cutoff-equivalent "
-             "specificity gate this project has otherwise lacked in "
-             "`profile` mode. Requires orfm + hmmscan on PATH.",
-    )
-    cascade.add_argument(
-        "--hmm_db", default=None, metavar="OSMO_REFDB.HMM",
-        help="Path to the pressed osmo_refdb HMM database. Required when "
-             "--cascade_config is given.",
-    )
-    cascade.add_argument(
-        "--exclude_families", default=None, metavar="OSMO_REFDB.PROFILE_EXCLUDED_FAMILIES.TXT",
-        help="Path to osmo_refdb's <release>.profile_excluded_families.txt "
-             "(families marked scope: annotate_only, e.g. murB -- a "
-             "near-universal housekeeping gene with no osmoadaptation-"
-             "specific signal at the read level). Those families are "
-             "still searched normally; this only drops them from the "
-             "reported gene_counts.tsv.",
+        "--cascade", action="store_true", default=False,
+        help="Give reads a second opinion from hmmscan when their DIAMOND "
+             "call lands on a family with demonstrated precision problems "
+             "(e.g. betL vs betT/CaiT), using DATABASE's "
+             "osmo_refdb.profile_cascade.tsv and hmms/osmo_refdb.hmm -- "
+             "only that flagged subset pays the extra cost, not the whole "
+             "dataset. DIAMOND's GA-cutoff-equivalent specificity gate "
+             "this project has otherwise lacked in `profile` mode. "
+             "Requires orfm + hmmscan on PATH, and both files present in "
+             "DATABASE.",
     )
 
     _add_filter_args(p)
@@ -186,8 +176,13 @@ def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
-        "db", metavar="DIAMOND_DB",
-        help="Path to the osmodiamond DIAMOND database (.dmnd).",
+        "database", metavar="DATABASE",
+        help="Path to an unpacked osmo_refdb release directory (e.g. "
+             "releases/v5/). osmotool finds osmo_refdb.dmnd, "
+             "hmms/osmo_refdb.hmm, osmo_refdb.diamond_cutoffs.tsv, and "
+             "osmo_refdb.annotate_excluded_families.txt inside it by "
+             "their fixed names -- no need to point at each file "
+             "separately.",
     )
     p.add_argument(
         "assembly", metavar="ASSEMBLY.FASTA",
@@ -200,55 +195,21 @@ def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--method", choices=["diamond", "hmm", "both"], default="hmm",
         help="Detection method. 'hmm' (default) runs hmmscan --cut_ga "
-             "against --hmm_db using each family's calibrated "
-             "gathering-threshold cutoff -- meaningful here (unlike in "
-             "`profile`) because Prodigal-called ORFs are full-length, the "
-             "same scale those cutoffs were calibrated against. Validated "
-             "against a real E. coli K-12 genome to be meaningfully more "
-             "specific than DIAMOND for this reference database (fixed a "
-             "false positive and an over-counted family DIAMOND got "
-             "wrong). Requires --hmm_db and hmmscan on PATH -- pass "
-             "'diamond' instead if you want to avoid the HMMER dependency, "
-             "or 'both' to get DIAMOND's output alongside HMM's for "
-             "comparison.",
-    )
-    p.add_argument(
-        "--hmm_db", default=None, metavar="OSMO_REFDB.HMM",
-        help="Path to the pressed osmo_refdb HMM database "
-             "(hmms/osmo_refdb.hmm, alongside its .h3f/.h3i/.h3m/.h3p "
-             "press indices). Required when --method is 'hmm' (the "
-             "default) or 'both'; pass --method diamond if you don't have "
-             "this file.",
-    )
-    p.add_argument(
-        "--diamond_cutoffs", default=None, metavar="OSMO_REFDB.DIAMOND_CUTOFFS.TSV",
-        help="Path to osmo_refdb's <release>.diamond_cutoffs.tsv (from "
-             "08b_calibrate_diamond_cutoffs.py). Gives DIAMOND calls a "
-             "per-family specificity gate analogous to HMM's GA cutoff -- "
-             "without it, a single flat --min_identity applies to every "
-             "family, which can't separate a true gene from a genuinely "
-             "close paralog (e.g. betL vs betT/CaiT) above that threshold. "
-             "Only offered here, not in `profile`: these cutoffs are "
-             "calibrated against full-length protein-vs-protein "
-             "alignments, the same scale as Prodigal ORFs -- applying them "
-             "to short read fragments would hit the same scale mismatch "
-             "problem HMM's GA cutoffs have on short reads.",
+             "against DATABASE's hmms/osmo_refdb.hmm using each family's "
+             "calibrated gathering-threshold cutoff -- meaningful here "
+             "(unlike in `profile`) because Prodigal-called ORFs are "
+             "full-length, the same scale those cutoffs were calibrated "
+             "against. Validated against a real E. coli K-12 genome to be "
+             "meaningfully more specific than DIAMOND for this reference "
+             "database (fixed a false positive and an over-counted family "
+             "DIAMOND got wrong). Requires hmms/osmo_refdb.hmm present in "
+             "DATABASE and hmmscan on PATH -- pass 'diamond' instead if "
+             "you want to avoid the HMMER dependency, or 'both' to get "
+             "DIAMOND's output alongside HMM's for comparison.",
     )
     p.add_argument(
         "--keep_proteins", action="store_true", default=False,
         help="Keep the Prodigal protein FASTA (ignored when --proteins is given).",
-    )
-    p.add_argument(
-        "--exclude_families", default=None, metavar="OSMO_REFDB.ANNOTATE_EXCLUDED_FAMILIES.TXT",
-        help="Path to osmo_refdb's <release>.annotate_excluded_families.txt "
-             "(currently just decoy references, e.g. betL_decoy -- "
-             "families.yaml: decoy_from_negatives -- which exist purely to "
-             "win DIAMOND's best-hit contest away from a mislabeled call "
-             "and must never appear as a reported gene family). Those "
-             "sequences are still searched normally; this only drops them "
-             "from the reported gene_counts.tsv. Note this is a different "
-             "file from `profile`'s --exclude_families: annotate_only "
-             "families like murB stay visible here.",
     )
 
     _add_filter_args(p)

@@ -42,17 +42,37 @@ singularity pull docker://ghcr.io/barbarahelena/osmotool:latest
 
 ## Reference database
 
-`osmotool` needs a reference DIAMOND database (`--database`, `.dmnd`) and,
-for HMM-based detection (`annotate`'s default, or `profile`'s optional
-cascade), a pressed HMM database (`--hmm_db`, `.hmm` + `.h3*` indices).
-These are built and benchmarked separately by
-[`osmo_refdb`](https://github.com/barbarahelena/osmo_refdb) — download the
-latest release from Zenodo:
+`osmotool` takes a single `DATABASE` argument: the path to an unpacked
+[`osmo_refdb`](https://github.com/barbarahelena/osmo_refdb) release
+directory (e.g. `releases/v5/`) — download the latest release from Zenodo
+and extract it before pointing `DATABASE` at the resulting folder:
 
 **v5** — DOI: [10.5281/zenodo.21420253](https://doi.org/10.5281/zenodo.21420253)
 
+```bash
+tar -xzf osmo_refdb_v5.tar.gz    # produces a v5/ directory
+osmotool profile v5 ...
+```
+
 Cite this DOI (alongside `osmotool` itself) in any publication using these
 results.
+
+Inside that directory, osmotool finds everything it needs by fixed
+filename — no need to point at each file separately:
+
+| File | Used by |
+|---|---|
+| `osmo_refdb.dmnd` | both (DIAMOND database) |
+| `hmms/osmo_refdb.hmm` (+ `.h3*` indices) | `annotate`'s default `--method hmm`/`both`; `profile --cascade` |
+| `osmo_refdb.profile_cascade.tsv` | `profile --cascade` |
+| `osmo_refdb.diamond_cutoffs.tsv` | `annotate --method diamond`/`both` (auto-applied if present) |
+| `osmo_refdb.profile_excluded_families.txt` | `profile` (auto-applied if present) |
+| `osmo_refdb.annotate_excluded_families.txt` | `annotate` (auto-applied if present) |
+
+Only `osmo_refdb.dmnd` is required. Everything else is optional and used
+automatically when present, except the `profile` DIAMOND+HMM cascade,
+which also needs `--cascade` on the command line since it pulls in
+`orfm` + `hmmscan` as extra dependencies.
 
 ## Usage
 
@@ -60,7 +80,7 @@ results.
 
 ```bash
 osmotool profile \
-  /path/to/osmodiamond.dmnd \
+  /path/to/osmo_refdb/releases/v5 \
   -1 sample_R1.fastq.gz \
   -2 sample_R2.fastq.gz \
   --out_prefix results/sample \
@@ -74,24 +94,23 @@ Single-end reads:
 
 ```bash
 osmotool profile \
-  /path/to/osmodiamond.dmnd \
+  /path/to/osmo_refdb/releases/v5 \
   --singles sample.fastq.gz \
   --out_prefix results/sample \
   --threads 8
 ```
 
 With the DIAMOND+HMM cascade (a second HMM opinion on families with
-demonstrated DIAMOND precision problems) and scope-excluded families
-hidden from the report:
+demonstrated DIAMOND precision problems). Scope-excluded families are
+hidden from the report automatically whenever
+`osmo_refdb.profile_excluded_families.txt` is present in `DATABASE`:
 
 ```bash
 osmotool profile \
-  /path/to/osmodiamond.dmnd \
+  /path/to/osmo_refdb/releases/v5 \
   -1 sample_R1.fastq.gz -2 sample_R2.fastq.gz \
   --out_prefix results/sample \
-  --hmm_db /path/to/osmo_refdb.hmm \
-  --cascade_config /path/to/osmo_refdb.profile_cascade.tsv \
-  --exclude_families /path/to/osmo_refdb.profile_excluded_families.txt \
+  --cascade \
   --threads 8
 ```
 
@@ -100,29 +119,27 @@ osmotool profile \
 ```bash
 # HMM (default method) with Prodigal ORF prediction:
 osmotool annotate \
-  /path/to/osmodiamond.dmnd \
+  /path/to/osmo_refdb/releases/v5 \
   assembly.fasta \
-  --hmm_db /path/to/osmo_refdb.hmm \
   --out_prefix results/assembly \
   --threads 8
 
-# DIAMOND instead (avoids the HMMER dependency), with a per-family
-# specificity gate and decoy references hidden from the report:
+# DIAMOND instead (avoids the HMMER dependency). The per-family
+# specificity gate and decoy references hidden from the report are
+# applied automatically whenever osmo_refdb.diamond_cutoffs.tsv /
+# osmo_refdb.annotate_excluded_families.txt are present in DATABASE:
 osmotool annotate \
-  /path/to/osmodiamond.dmnd \
+  /path/to/osmo_refdb/releases/v5 \
   assembly.fasta \
   --method diamond \
-  --diamond_cutoffs /path/to/osmo_refdb.diamond_cutoffs.tsv \
-  --exclude_families /path/to/osmo_refdb.annotate_excluded_families.txt \
   --out_prefix results/assembly \
   --threads 8
 
 # With pre-called proteins (skip Prodigal):
 osmotool annotate \
-  /path/to/osmodiamond.dmnd \
+  /path/to/osmo_refdb/releases/v5 \
   assembly.fasta \
   --proteins assembly_proteins.faa \
-  --hmm_db /path/to/osmo_refdb.hmm \
   --out_prefix results/assembly \
   --threads 8
 ```
@@ -164,13 +181,16 @@ for true RPKM.
 | `--threads` | 4 | Threads for DIAMOND |
 | `--tmpdir` | `$TMPDIR` | Temp directory for merged paired-end FASTQ |
 | `--total_reads` | *(counted)* | Skip read counting when count is already known |
-| `--method` | `hmm` (annotate only) | `diamond`, `hmm`, or `both`. `profile` is DIAMOND-only (HMM's GA cutoffs don't apply to short read fragments); `annotate` defaults to HMM since it's meaningfully more specific on full-length ORFs |
-| `--hmm_db` | none | Path to the pressed reference HMM database (`osmo_refdb.hmm` + `.h3*` indices). Required for `--method hmm`/`both` (`annotate`), or together with `--cascade_config` (`profile`) |
-| `--cascade_config` | none | `profile` only. Path to `<release>.profile_cascade.tsv`: reads whose DIAMOND call lands on a family with demonstrated precision problems get a second opinion from `hmmscan` before being kept. Requires `--hmm_db`, plus `orfm`+`hmmscan` on PATH |
-| `--diamond_cutoffs` | none | `annotate` only. Path to `<release>.diamond_cutoffs.tsv`: per-family minimum DIAMOND bitscore, giving DIAMOND calls a specificity gate analogous to HMM's GA cutoff |
-| `--exclude_families` | none | Path to a release's excluded-families list (`profile`: `<release>.profile_excluded_families.txt`; `annotate`: `<release>.annotate_excluded_families.txt` — different files). Those families/labels are still searched normally; this only drops them from the reported `gene_counts.tsv` |
+| `--method` | `hmm` (annotate only) | `diamond`, `hmm`, or `both`. `profile` is DIAMOND-only (HMM's GA cutoffs don't apply to short read fragments); `annotate` defaults to HMM since it's meaningfully more specific on full-length ORFs. Requires `hmms/osmo_refdb.hmm` present in `DATABASE` for `hmm`/`both` |
+| `--cascade` | off | `profile` only. Give reads whose DIAMOND call lands on a family with demonstrated precision problems a second opinion from `hmmscan`, using `DATABASE`'s `osmo_refdb.profile_cascade.tsv` + `hmms/osmo_refdb.hmm`. Requires `orfm`+`hmmscan` on PATH, and both files present in `DATABASE` |
 | `--proteins` | none | `annotate` only. Pre-called protein FASTA (skip Prodigal) |
 | `--keep_aln` / `--keep_proteins` | off | Retain intermediate alignment/protein files instead of deleting them after the run |
+
+DIAMOND per-family cutoffs (`osmo_refdb.diamond_cutoffs.tsv`) and
+scope-excluded-families reporting filters
+(`osmo_refdb.profile_excluded_families.txt` /
+`osmo_refdb.annotate_excluded_families.txt`) apply automatically whenever
+present in `DATABASE` — no flag needed.
 
 ## HPC usage
 
@@ -205,7 +225,7 @@ module load anaconda3
 conda activate osmotool
 
 osmotool profile \
-    /path/to/osmodiamond.dmnd \
+    /path/to/osmo_refdb/releases/v5 \
     -1 ${SAMPLE}_R1.fastq.gz \
     -2 ${SAMPLE}_R2.fastq.gz \
     --out_prefix results/${SAMPLE} \
@@ -228,7 +248,7 @@ process OSMOTOOL_PROFILE {
 
     input:
     tuple val(sample), path(r1), path(r2)
-    path diamond_db
+    path osmo_refdb_dir
 
     output:
     tuple val(sample), path("${sample}.gene_counts.tsv"), emit: counts
@@ -237,7 +257,7 @@ process OSMOTOOL_PROFILE {
     script:
     """
     osmotool profile \\
-        ${diamond_db} \\
+        ${osmo_refdb_dir} \\
         -1 ${r1} -2 ${r2} \\
         --out_prefix ${sample} \\
         --threads ${task.cpus}
