@@ -1,9 +1,3 @@
-# osmo_refdb, osmodiamond, osmohmm are separate projects living alongside
-# this repo on disk, not part of the osmotool package -- not tracked here.
-osmo_refdb/
-osmodiamond/
-osmohmm/
-
 # Python
 __pycache__/
 *.py[cod]
