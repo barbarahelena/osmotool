@@ -5,8 +5,14 @@ handle_args.py — argument parsing for osmotool
 from __future__ import annotations
 
 import argparse
+from importlib.metadata import PackageNotFoundError, version
 
 from osmotool.download import RELEASES, LATEST_RELEASE
+
+try:
+    __version__ = version("osmotool")
+except PackageNotFoundError:
+    __version__ = "unknown"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--version", action="version", version="%(prog)s (see pyproject.toml)"
+        "--version", action="version", version=f"%(prog)s {__version__}"
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", default=False,
