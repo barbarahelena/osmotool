@@ -74,6 +74,17 @@ class TestWriteGeneCounts:
         )
         assert out.name == "mysample.gene_counts.tsv"
 
+    def test_total_reads_label_override(self, tmp_path: Path, sample_counts, sample_rpm):
+        prefix = str(tmp_path / "sample")
+        out = write_gene_counts(
+            prefix, sample_counts, sample_rpm,
+            total_reads=4128, filtered_reads=187,
+            normalisation="copies_per_kb", total_reads_label="total_proteins",
+        )
+        lines = out.read_text().splitlines()
+        assert lines[0] == "# total_proteins\t4128"
+        assert lines[2] == "gene\traw_count\tCOPIES_PER_KB"
+
     def test_raw_count_values(self, tmp_path: Path, sample_counts, sample_rpm):
         prefix = str(tmp_path / "sample")
         out = write_gene_counts(

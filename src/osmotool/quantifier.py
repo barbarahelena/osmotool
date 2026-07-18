@@ -1,5 +1,6 @@
 """
-quantifier.py — read/hit counting and RPKM/RPM normalisation for osmotool
+quantifier.py — read/hit counting and RPM/copies_per_kb normalisation for
+osmotool
 
 Counting rules
 --------------
@@ -14,10 +15,16 @@ Counting rules
 
 Normalisation
 -------------
-* **RPM** (profile mode — no gene lengths available):
+* **RPM** (``profile`` mode — reads vs. a database, no gene lengths
+  available): a real depth-normalised abundance estimate.
     RPM = (raw_count × 10⁶) / total_reads
-* **RPKM** (annotate mode — protein lengths from Prodigal available):
-    RPKM = (raw_count × 10⁹) / (gene_length_bp × total_reads)
+* **copies_per_kb** (``annotate`` mode — protein lengths from Prodigal
+  available): despite reusing RPM/RPKM's formula shape, this is
+  gene-family copy number normalised by length and by the total number
+  of predicted proteins in *this one genome* — not an abundance or
+  expression estimate, since annotate mode has no sequencing depth to
+  normalise against. Don't compare it directly to profile mode's RPM.
+    copies_per_kb = (raw_count × 10⁹) / (gene_length_bp × total_proteins)
   gene_length_bp = length_aa × 3  (coding sequence approximation)
 """
 
@@ -208,7 +215,13 @@ def compute_rpkm(
     gene_lengths_aa: dict[str, float],
 ) -> dict[str, float]:
     """
-    RPKM = (raw_count × 10⁹) / (gene_length_bp × total_reads)
+    copies_per_kb = (raw_count × 10⁹) / (gene_length_bp × total_reads)
+
+    Named for the RPKM formula it reuses, but callers should treat the
+    result as gene copy number normalised by length and total gene count,
+    not as a read-depth abundance estimate — see this module's docstring.
+    In ``annotate`` mode, *total_reads* is actually the total number of
+    Prodigal-called proteins in the genome.
 
     gene_length_bp is estimated as the mean protein length (aa) × 3 for
     each family, derived from the proteins that received hits.
@@ -218,7 +231,8 @@ def compute_rpkm(
     counts:
         Per-family raw counts.
     total_reads:
-        Total input reads (denominator for normalisation).
+        Total input reads, or (in ``annotate`` mode) total predicted
+        proteins — the denominator for normalisation.
     gene_lengths_aa:
         Mapping of family_label → mean gene length in amino acids.
         Families absent from this dict fall back to RPM normalisation.

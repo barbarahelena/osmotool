@@ -21,22 +21,29 @@ def write_gene_counts(
     *,
     total_reads: int,
     filtered_reads: int,
-    normalisation: str = "rpm",  # "rpm" or "rpkm"
+    normalisation: str = "rpm",  # "rpm" or "copies_per_kb"
+    total_reads_label: str = "total_reads",
 ) -> Path:
     """
     Write ``<out_prefix>.gene_counts.tsv``.
 
     Format::
 
-        # total_reads    <N>
+        # <total_reads_label>    <N>
         # filtered_reads <N>
-        gene    raw_count   <rpm|rpkm>
+        gene    raw_count   <rpm|copies_per_kb>
         ectA    12.5        3.21
         ...
 
+    total_reads_label:
+        Header label for the first row. ``profile`` mode passes reads
+        (the default, "total_reads"); ``annotate`` mode passes
+        "total_proteins" since that count is Prodigal-called ORFs, not
+        sequencing reads.
+
     Returns the output path.
     """
-    out_path = Path(out_prefix).with_suffix("") 
+    out_path = Path(out_prefix).with_suffix("")
     # avoid double-suffix: strip any existing suffix only if it is not
     # a meaningful extension; just append directly
     out_path = Path(str(out_prefix) + ".gene_counts.tsv")
@@ -45,7 +52,7 @@ def write_gene_counts(
     families = sorted(counts.keys())
 
     with open(out_path, "w") as fh:
-        fh.write(f"# total_reads\t{total_reads}\n")
+        fh.write(f"# {total_reads_label}\t{total_reads}\n")
         fh.write(f"# filtered_reads\t{filtered_reads}\n")
         fh.write(f"gene\traw_count\t{norm_col}\n")
         for fam in families:

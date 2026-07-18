@@ -2,7 +2,7 @@
 runners.py — high-level orchestrators for osmotool subcommands
 
 profile  :  FASTQ reads → diamond blastx → RPM counts
-annotate :  Assembly FASTA (or proteins) → Prodigal → diamond blastp → RPKM counts
+annotate :  Assembly FASTA (or proteins) → Prodigal → diamond blastp → copies_per_kb counts
 """
 
 from __future__ import annotations
@@ -327,7 +327,7 @@ def run_annotate(
     else:
         proteins_path = Path(proteins)
 
-    # --- protein lengths for RPKM ---
+    # --- protein lengths for copies_per_kb normalisation ---
     log.info("Parsing protein lengths from %s", proteins_path)
     protein_lengths = parse_protein_lengths(proteins_path)
     total_proteins = len(protein_lengths)
@@ -405,7 +405,7 @@ def _finish_annotate_method(
     evalue: float | None,
     exclude_families: str | None = None,
 ) -> tuple[Path, Path]:
-    """Shared best-hit selection / counting / RPKM / output-writing tail for
+    """Shared best-hit selection / counting / copies_per_kb / output-writing tail for
     one annotate method (diamond or hmm), factored out since both methods
     produce identically-shaped alignment rows (see parse_hmmscan_output's
     docstring) and go through the same quantification and output steps."""
@@ -418,15 +418,23 @@ def _finish_annotate_method(
         excluded = load_excluded_families(exclude_families)
         counts = {fam: cnt for fam, cnt in counts.items() if fam not in excluded}
 
-    # RPKM using mean hit-subject protein lengths
+    # copies_per_kb: gene-family copy number normalised by mean hit-subject
+    # protein length and total predicted proteins in this genome. Same
+    # formula shape as profile's RPM/RPKM but there's no sequencing depth
+    # here to normalise against -- total_proteins is a per-genome ORF
+    # count, not a read count -- so this is a compositional statistic
+    # ("how much of this genome, length-corrected, is this family"), not
+    # an abundance/expression estimate. Don't compare it directly against
+    # profile mode's RPM values.
     family_lengths_aa = estimate_family_lengths(best_hits, protein_lengths)
-    rpkm = compute_rpkm(counts, total_proteins, family_lengths_aa)
+    copies_per_kb = compute_rpkm(counts, total_proteins, family_lengths_aa)
 
     counts_path = write_gene_counts(
-        out_prefix, counts, rpkm,
+        out_prefix, counts, copies_per_kb,
         total_reads=total_proteins,
         filtered_reads=filtered_reads,
-        normalisation="rpkm",
+        normalisation="copies_per_kb",
+        total_reads_label="total_proteins",
     )
     stats = build_aln_stats(
         mode=f"annotate:{method_name}",

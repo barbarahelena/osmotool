@@ -11,7 +11,10 @@ Screen osmoadaptation genes in metagenomic datasets using [DIAMOND](https://gith
 | `profile` | FASTQ reads (paired or single-end) | `diamond blastx` (6-frame translation), optionally with a DIAMOND+HMM cascade (`--cascade`) |
 | `annotate` | Assembly FASTA (or pre-called proteins) | Prodigal → `hmmscan --cut_ga` (default), or `diamond blastp` (`--method diamond`) |
 
-Both modes produce per-gene raw counts and RPKM abundances.
+Both modes produce per-gene raw counts and a normalised value: `profile`
+reports real depth-normalised RPM abundances; `annotate` reports
+`copies_per_kb`, a per-genome gene-copy-number statistic (see
+[Output](#output) below) — the two are not directly comparable.
 
 ## Installation
 
@@ -34,11 +37,16 @@ pip install osmotool
 
 ```bash
 # Docker
-docker pull ghcr.io/barbarahelena/osmotool:latest
+docker pull barbarahelena/osmotool:latest
 
 # Singularity (HPC)
-singularity pull docker://ghcr.io/barbarahelena/osmotool:latest
+singularity pull docker://barbarahelena/osmotool:latest
 ```
+
+Images are built and pushed to Docker Hub automatically by
+[`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml)
+whenever a version tag is pushed (see [Versioning](#versioning)) — `:latest`
+and `:X.Y.Z` are both updated on each release.
 
 ## Reference database
 
@@ -148,24 +156,48 @@ osmotool annotate \
 
 | File | Description |
 |---|---|
-| `<prefix>.gene_counts.tsv` | Per-gene raw counts and RPKM |
+| `<prefix>.gene_counts.tsv` | Per-gene raw counts and normalised value (`rpm` or `copies_per_kb`, depending on mode) |
 | `<prefix>.aln_stats.tsv` | Summary statistics |
 
 ### `gene_counts.tsv` format
 
+`profile` mode:
+
 ```
 # total_reads    1000000
 # filtered_reads 42753
-gene    raw_count   rpkm
+gene    raw_count   rpm
 UniRef90_A0A000   12.5    3.21
 UniRef90_A0A001    4.0    1.05
 ```
 
-**RPKM** = `(raw_count × 10⁹) / (gene_length_bp × total_reads)`
+**RPM** = `(raw_count × 10⁶) / total_reads` — reads are not assembled, so no gene
+length is available and no per-length correction is applied. This is a real
+sequencing-depth-normalised abundance estimate: it corrects for how many reads a
+sample happened to be sequenced to.
 
-In `profile` mode, gene lengths are not available (reads are not assembled), so RPM is
-reported instead of RPKM. In `annotate` mode, protein lengths from Prodigal are used
-for true RPKM.
+`annotate` mode:
+
+```
+# total_proteins 4128
+# filtered_reads 187
+gene    raw_count   copies_per_kb
+ectA    1.0         5.87
+ectB    1.0         6.42
+```
+
+**copies_per_kb** = `(raw_count × 10⁹) / (gene_length_bp × total_proteins)`, using
+protein lengths from Prodigal.
+
+This reuses RPM/RPKM's formula shape, but it is **not** an abundance or expression
+estimate — `annotate` works on an assembled genome, not raw reads, so there's no
+sequencing depth to normalise against. `total_proteins` is the number of
+Prodigal-called ORFs in that one genome, and `raw_count` is that family's copy
+number in the genome (usually 0, 1, or a small integer). `copies_per_kb` is a
+gene-length- and proteome-size-corrected copy-number statistic — useful for
+comparing a family's representation across genomes of different sizes, but **not**
+directly comparable to `profile` mode's RPM values, which measure something
+different (community-level read abundance).
 
 **Paired-end counting**: each read of a pair counts as 0.5 (one read pair = one fragment).
 
@@ -244,7 +276,7 @@ to skip the `zcat | wc -l` step on very large files.
 
 ```nextflow
 process OSMOTOOL_PROFILE {
-    container 'ghcr.io/barbarahelena/osmotool:latest'
+    container 'barbarahelena/osmotool:latest'
 
     input:
     tuple val(sample), path(r1), path(r2)
