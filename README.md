@@ -4,10 +4,11 @@ Screen osmoadaptation genes in metagenomic datasets using [DIAMOND](https://gith
 
 ## Overview
 
-`osmotool` has two subcommands:
+`osmotool` has three subcommands:
 
 | Subcommand | Input | Method |
 |---|---|---|
+| `download-db` | — | Downloads and unpacks an [`osmo_refdb`](https://github.com/barbarahelena/osmo_refdb) release from Zenodo |
 | `profile` | FASTQ reads (paired or single-end) | `diamond blastx` (6-frame translation), optionally with a DIAMOND+HMM cascade (`--cascade`) |
 | `annotate` | Assembly FASTA (or pre-called proteins) | Prodigal → `hmmscan --cut_ga` (default), or `diamond blastp` (`--method diamond`) |
 
@@ -52,13 +53,27 @@ and `:X.Y.Z` are both updated on each release.
 
 `osmotool` takes a single `DATABASE` argument: the path to an unpacked
 [`osmo_refdb`](https://github.com/barbarahelena/osmo_refdb) release
-directory (e.g. `releases/v5/`) — download the latest release from Zenodo
-and extract it before pointing `DATABASE` at the resulting folder:
+directory (e.g. `v5/`) — download and unpack it with:
+
+```bash
+osmotool download-db --release v5 --location /path/to/refdb
+# -> downloads + unpacks into /path/to/refdb/v5/
+osmotool profile /path/to/refdb/v5 ...
+```
+
+`--release` defaults to `latest` (currently `v5`); `--location` defaults to
+the current directory. Already-extracted releases are left alone unless
+`--force` is passed, and the downloaded archive is deleted after a
+successful extraction unless `--keep_archive` is passed. The download is
+checksum-verified against Zenodo's reported md5 before extraction.
 
 **v5** — DOI: [10.5281/zenodo.21420253](https://doi.org/10.5281/zenodo.21420253)
 
+Or download manually:
+
 ```bash
-tar -xzf osmo_refdb_v5.tar.gz    # produces a v5/ directory
+curl -LO https://zenodo.org/records/21420253/files/v5.tar.gz
+tar -xzf v5.tar.gz    # produces a v5/ directory
 osmotool profile v5 ...
 ```
 

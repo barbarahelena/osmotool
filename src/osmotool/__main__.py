@@ -8,6 +8,7 @@ import sys
 
 from osmotool.handle_args import build_parser
 from osmotool.runners import run_profile, run_annotate
+from osmotool.download import download_refdb
 from osmotool.utils import setup_logging, resolve_refdb
 
 
@@ -78,6 +79,15 @@ def main(argv: list[str] | None = None) -> int:
                 tmpdir=args.tmpdir,
                 exclude_families=str(refdb.exclude_families) if refdb.exclude_families else None,
             )
+
+        elif args.subcommand == "download-db":
+            out_dir = download_refdb(
+                args.release,
+                args.location,
+                force=args.force,
+                keep_archive=args.keep_archive,
+            )
+            print(out_dir)
 
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)

@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import argparse
 
+from osmotool.download import RELEASES, LATEST_RELEASE
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -31,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_profile_parser(sub)
     _add_annotate_parser(sub)
+    _add_download_parser(sub)
 
     return parser
 
@@ -164,6 +167,40 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
     _add_filter_args(p)
     _add_output_args(p)
     _add_hpc_args(p)
+
+
+# ---------------------------------------------------------------------------
+# download-db subcommand
+# ---------------------------------------------------------------------------
+
+def _add_download_parser(sub: argparse._SubParsersAction) -> None:
+    known = ", ".join(sorted(RELEASES))
+    p = sub.add_parser(
+        "download-db",
+        help="Download and unpack an osmo_refdb release from Zenodo.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    p.add_argument(
+        "--release", default="latest", metavar="NAME",
+        help=f"osmo_refdb release to download, or 'latest' (currently "
+             f"{LATEST_RELEASE}). Known releases: {known}.",
+    )
+    p.add_argument(
+        "--location", default=".", metavar="DIR",
+        help="Directory to download and unpack into. The release unpacks "
+             "into a subdirectory named after the release (e.g. "
+             "<location>/v5/) -- pass that path as osmotool's DATABASE "
+             "argument.",
+    )
+    p.add_argument(
+        "--force", action="store_true", default=False,
+        help="Re-download and overwrite even if the release already exists at --location.",
+    )
+    p.add_argument(
+        "--keep_archive", action="store_true", default=False,
+        help="Keep the downloaded .tar.gz alongside the extracted directory "
+             "instead of deleting it after extraction.",
+    )
 
 
 # ---------------------------------------------------------------------------
