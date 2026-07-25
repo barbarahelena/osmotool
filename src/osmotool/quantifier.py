@@ -38,16 +38,36 @@ from osmotool.utils import gene_family_from_header
 
 log = logging.getLogger("osmotool")
 
-# Families present in osmodiamond. Only cosmetic: controls which families
+# Families present in osmo_refdb. Only cosmetic: controls which families
 # are guaranteed to appear as an explicit 0-count row in gene_counts.tsv
 # even with zero hits -- a family that gets >=1 hit shows up regardless,
 # via count_hits()'s defaultdict. Keep in sync with osmo_refdb's
 # families.yaml when adding a new gene family (that's the actual source
-# of truth for what the reference database contains).
+# of truth for what the reference database contains). Current as of
+# osmo_refdb v7 (43 families -- one hmms/*.hmm per family, plus
+# mrpA_mrpB_fused, a distinctly-reportable DIAMOND-only family label for
+# the confirmed mrpA/mrpB fused-ORF variant with no equivalent fused HMM
+# profile). Deliberately excludes decoy families (e.g. betL_decoy) -- those
+# must never appear as a reported row (see osmo_refdb.annotate_excluded_families.txt).
 KNOWN_FAMILIES = (
-    "ectA", "ectB", "ectC", "betL", "kdpA", "nhaA",
-    "proX", "proP", "otsA", "otsB", "mscL", "mscS",
-    "galE", "mazG", "murB",
+    "betA", "betB", "betL",
+    "cspA",
+    "ectA", "ectB", "ectC",
+    "galE",
+    "gor", "gshA", "gshB", "gshF",
+    "kdpA",
+    "ktrA", "ktrB", "ktrD",
+    "mazG",
+    "mrpA", "mrpB", "mrpC", "mrpD", "mrpE", "mrpF", "mrpG", "mrpA_mrpB_fused",
+    "mscL", "mscS",
+    "murB",
+    "nhaA",
+    "opuAA", "opuAB", "opuAC",
+    "opuBA", "opuBB", "opuBC",
+    "opuCA", "opuCB", "opuCC",
+    "otsA", "otsB",
+    "proP", "proX",
+    "trkA", "trkH",
 )
 
 

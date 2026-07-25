@@ -78,6 +78,8 @@ def main(argv: list[str] | None = None) -> int:
                 keep_proteins=args.keep_proteins,
                 tmpdir=args.tmpdir,
                 exclude_families=str(refdb.exclude_families) if refdb.exclude_families else None,
+                skip_systems=args.skip_systems,
+                systems_config=args.systems_config,
             )
 
         elif args.subcommand == "download-db":

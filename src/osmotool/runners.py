@@ -19,6 +19,7 @@ from osmotool.functions import (
     parse_diamond_output,
     parse_hmmscan_output,
     parse_protein_lengths,
+    parse_orf_coordinates,
     load_diamond_cutoffs,
     load_cascade_config,
     load_excluded_families,
@@ -35,7 +36,11 @@ from osmotool.quantifier import (
     filter_by_family_cutoff,
     apply_cascade_check,
 )
-from osmotool.output import write_gene_counts, write_aln_stats, build_aln_stats
+from osmotool.output import (
+    write_gene_counts, write_aln_stats, build_aln_stats, write_system_calls,
+    PROFILE_SYSTEMS_NOTE,
+)
+from osmotool.systems import detect_systems, DEFAULT_SYSTEMS, load_systems_config
 from osmotool.utils import resolve_out_prefix, check_tool
 
 log = logging.getLogger("osmotool")
@@ -95,6 +100,17 @@ def run_profile(
         near-universal housekeeping gene with no osmoadaptation-specific
         signal at the read level). Those families are still searched
         normally; this only drops them from the reported gene_counts.tsv.
+
+    No multi-subunit system detection here (see systems.py / `annotate`'s
+    --skip_systems): short reads don't carry contig-level coordinates, so
+    the proximity/colocalization check that makes a system-level "present"
+    call meaningful (are these subunit genes actually next to each other,
+    or just independently present somewhere in the community) simply isn't
+    checkable at read length. This mode reports each gene family's
+    abundance independently, same as before Task 2 added the systems
+    layer -- a system-level claim (opuA/opuB/opuC/mrp/ect/ots/trk/ktr)
+    requires `annotate` mode (or a dedicated assembly+binning step) on the
+    same samples. See this project's README for the same note.
     """
     check_tool("diamond")
     if cascade_config is not None:
@@ -164,6 +180,7 @@ def run_profile(
         min_query_cover=min_query_cover,
         min_subject_cover=min_subject_cover,
         evalue=evalue,
+        note_systems=PROFILE_SYSTEMS_NOTE,
     )
     stats_path = write_aln_stats(out_prefix, stats)
 
@@ -258,7 +275,9 @@ def run_annotate(
     keep_proteins: bool = False,
     tmpdir: str | None = None,
     exclude_families: str | None = None,
-) -> dict[str, tuple[Path, Path]]:
+    skip_systems: bool = False,
+    systems_config: str | None = None,
+) -> dict[str, tuple[Path, Path, Path | None]]:
     """
     Annotate an assembly (or pre-called proteins) against osmodiamond.
 
@@ -301,9 +320,24 @@ def run_annotate(
         `profile`'s exclude_families, annotate_only families (e.g. murB)
         are deliberately NOT in this list -- they should stay visible here.
 
+    skip_systems:
+        Skip the Task 2 complex/system-aware detection layer (systems.py)
+        entirely -- no <out_prefix>.systems.tsv, no Prodigal-header
+        coordinate parsing. Off by default; set True to save the (small)
+        extra parsing cost, or if you just don't need it.
+
+    systems_config:
+        Optional path to a TSV overriding max_distance_genes/max_distance_bp
+        per system (columns: system, max_distance_genes, max_distance_bp) --
+        see systems.load_systems_config. Mandatory/accessory/fusion
+        membership is not overridable this way (structural, not a
+        calibration knob); only distance defaults are.
+
     Returns
     -------
-    {method_name: (gene_counts_path, aln_stats_path)}
+    {method_name: (gene_counts_path, aln_stats_path, systems_path_or_None)}
+    systems_path is None when skip_systems=True, or when no ORF had
+    coordinates (e.g. --proteins supplied with non-Prodigal headers).
     """
     if method not in ("diamond", "hmm", "both"):
         raise ValueError(f"Unknown method '{method}': expected diamond, hmm, or both")
@@ -333,7 +367,24 @@ def run_annotate(
     total_proteins = len(protein_lengths)
     log.info("  %d proteins", total_proteins)
 
-    results: dict[str, tuple[Path, Path]] = {}
+    # --- ORF coordinates for Task 2's system/complex detection layer ---
+    orf_coords: dict = {}
+    if not skip_systems:
+        orf_coords = parse_orf_coordinates(proteins_path)
+        if not orf_coords:
+            log.warning(
+                "No ORF coordinates parsed from %s (expected Prodigal-style "
+                "headers) -- skipping system/complex detection for this run",
+                proteins_path,
+            )
+        systems_def = (
+            load_systems_config(systems_config) if systems_config is not None
+            else DEFAULT_SYSTEMS
+        )
+    else:
+        systems_def = DEFAULT_SYSTEMS
+
+    results: dict[str, tuple[Path, Path, Path | None]] = {}
 
     if method in ("diamond", "both"):
         aln_file = Path(str(out_prefix) + ".blastp.tsv")
@@ -359,6 +410,7 @@ def run_annotate(
             min_identity=min_identity, min_query_cover=min_query_cover,
             min_subject_cover=min_subject_cover, evalue=evalue,
             exclude_families=exclude_families,
+            orf_coords=orf_coords, systems_def=systems_def,
         )
         if not keep_aln:
             aln_file.unlink(missing_ok=True)
@@ -374,6 +426,7 @@ def run_annotate(
             hmm_alignments, protein_lengths, total_proteins, db=str(hmm_db),
             min_identity=None, min_query_cover=None, min_subject_cover=None, evalue=None,
             exclude_families=exclude_families,
+            orf_coords=orf_coords, systems_def=systems_def,
         )
         if not keep_aln:
             hmm_aln_file.unlink(missing_ok=True)
@@ -386,8 +439,9 @@ def run_annotate(
     else:
         log.info("Protein FASTA retained: %s", proteins_path)
 
-    for method_name, (counts_path, stats_path) in results.items():
-        log.info("annotate (%s) complete: %s  %s", method_name, counts_path, stats_path)
+    for method_name, (counts_path, stats_path, systems_path) in results.items():
+        log.info("annotate (%s) complete: %s  %s%s", method_name, counts_path, stats_path,
+                  f"  {systems_path}" if systems_path else "")
     return results
 
 
@@ -404,11 +458,20 @@ def _finish_annotate_method(
     min_subject_cover: float | None,
     evalue: float | None,
     exclude_families: str | None = None,
-) -> tuple[Path, Path]:
+    orf_coords: dict | None = None,
+    systems_def: dict | None = None,
+) -> tuple[Path, Path, Path | None]:
     """Shared best-hit selection / counting / copies_per_kb / output-writing tail for
     one annotate method (diamond or hmm), factored out since both methods
     produce identically-shaped alignment rows (see parse_hmmscan_output's
-    docstring) and go through the same quantification and output steps."""
+    docstring) and go through the same quantification and output steps.
+
+    orf_coords/systems_def: Task 2's system/complex detection (systems.py),
+    run against this method's own best_hits -- diamond and hmm each get
+    their own independent systems.tsv, same as they already get independent
+    gene_counts.tsv/aln_stats.tsv. Skipped (systems_path=None) when
+    orf_coords is empty/None -- see run_annotate's docstring for why that
+    happens and how it degrades gracefully."""
     filtered_reads = len({row["qseqid"] for row in alignments})
     best_hits = select_best_hits(iter(alignments))
 
@@ -449,4 +512,9 @@ def _finish_annotate_method(
     )
     stats_path = write_aln_stats(out_prefix, stats)
 
-    return counts_path, stats_path
+    systems_path: Path | None = None
+    if orf_coords:
+        calls = detect_systems(best_hits, orf_coords, systems_def or DEFAULT_SYSTEMS)
+        systems_path = write_system_calls(out_prefix, calls)
+
+    return counts_path, stats_path, systems_path

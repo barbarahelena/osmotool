@@ -12,7 +12,10 @@ from osmotool.output import (
     write_gene_counts,
     write_aln_stats,
     build_aln_stats,
+    write_system_calls,
+    PROFILE_SYSTEMS_NOTE,
 )
+from osmotool.systems import SystemCall
 
 
 # ---------------------------------------------------------------------------
@@ -176,3 +179,57 @@ class TestBuildAlnStats:
             min_query_cover=0.8, evalue=1e-5,
         )
         assert float(stats["pct_reads_assigned"]) == pytest.approx(0.0)
+
+    def test_note_systems_present_when_passed(self):
+        stats = self._stats(note_systems=PROFILE_SYSTEMS_NOTE)
+        assert stats["note_systems"] == PROFILE_SYSTEMS_NOTE
+
+    def test_note_systems_absent_by_default(self):
+        stats = self._stats()
+        assert "note_systems" not in stats
+
+
+# ---------------------------------------------------------------------------
+# write_system_calls
+# ---------------------------------------------------------------------------
+
+class TestWriteSystemCalls:
+    def _calls(self) -> dict[str, SystemCall]:
+        return {
+            "opuA": SystemCall(
+                system="opuA", present=True, subunit_count=3, colocalized=True,
+                fragmented_assembly_flag=False, contig="NODE_1",
+                mandatory_hits=("opuAA", "opuAB", "opuAC"), accessory_hits=(),
+            ),
+            "mrp": SystemCall(
+                system="mrp", present=False, subunit_count=2, colocalized=False,
+                fragmented_assembly_flag=True, contig=None,
+                mandatory_hits=("mrpA", "mrpC"), accessory_hits=(),
+            ),
+        }
+
+    def test_creates_file(self, tmp_path: Path):
+        prefix = str(tmp_path / "sample")
+        out = write_system_calls(prefix, self._calls())
+        assert out.exists()
+
+    def test_output_filename(self, tmp_path: Path):
+        prefix = str(tmp_path / "mysample")
+        out = write_system_calls(prefix, self._calls())
+        assert out.name == "mysample.systems.tsv"
+
+    def test_header_row(self, tmp_path: Path):
+        prefix = str(tmp_path / "sample")
+        out = write_system_calls(prefix, self._calls())
+        lines = out.read_text().splitlines()
+        assert lines[0] == (
+            "system\tpresent\tsubunit_count\tcolocalized\t"
+            "fragmented_assembly_flag\tcontig\tmandatory_hits\taccessory_hits"
+        )
+
+    def test_rows_sorted_and_populated(self, tmp_path: Path):
+        prefix = str(tmp_path / "sample")
+        out = write_system_calls(prefix, self._calls())
+        lines = out.read_text().splitlines()[1:]
+        assert lines[0].startswith("mrp\tFalse\t2\tFalse\tTrue\t-\tmrpA,mrpC\t-")
+        assert lines[1].startswith("opuA\tTrue\t3\tTrue\tFalse\tNODE_1\topuAA,opuAB,opuAC\t-")
