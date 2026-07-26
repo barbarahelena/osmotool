@@ -27,6 +27,46 @@ of the actually-confirmed mrpA/mrpB).
 docstring in runners.py and this project's README for why (no contig-level
 coordinates at typical short-read lengths, so proximity/colocalization simply
 isn't checkable there).
+
+max_distance_genes/max_distance_bp defaults (see SystemDef) were checked
+against real complete-genome operons rather than shipped as the extension
+spec's untested guess, across six species: mrpA-G (B. subtilis, S. aureus,
+L. monocytogenes, H. elongata), opuABC (B. subtilis, L. monocytogenes),
+opuCABC (B. subtilis, S. aureus, L. monocytogenes, E. faecalis), ectABC
+(H. elongata -- the actual ectoine-discovery organism), and otsBA (E. coli)
+are ALL 0 intervening genes apart (gaps of -34 to +93bp -- essentially
+back-to-back CDSs, typical of a real co-transcribed operon), independent of
+species. STRING's precomputed "neighborhood" evidence score for B. subtilis
+mrpA/mrpB corroborates this from an entirely separate source (0.803 out of
+1.0, aggregated across STRING's own much larger reference-genome set).
+MacSyFinder/TXSScan's own expert-curated models (github.com/macsy-models)
+independently converge on a similar range for comparably-sized, similarly
+tightly-packed operons -- CasFinder's CRISPR-Cas models (7-9 genes, like
+`mrp`) use inter_gene_max_space=3; TXSScan's small transport systems like
+T1SS/T2SS (3-4 genes, like `opuA`/`ots`) use 5. Only genuinely large,
+multi-locus machinery (T6SS, the flagellum -- nothing in this panel is that
+complex) goes up to 20.
+
+The same multi-species sweep also surfaced a real false-bridging risk the
+spec's original 8-gene/8000bp suggestion didn't guard against: several
+species carry a duplicate/paralogous copy of the same operon nearby, always
+on the OPPOSITE strand -- e.g. H. elongata's second mrp-like cluster sits
+immediately adjacent to the first (0 genes / 236bp), well inside even the
+original window. Distance alone can't reliably reject that; strand
+information can, for free, with no threshold to calibrate (see
+_strand_consistent) -- a real operon is one uninterrupted same-strand
+transcriptional unit, and every genuine operon in this sweep was.
+
+Tightened to 3 genes / 2000bp (matching CasFinder's precedent exactly): a
+solid margin above every real operon gap observed across all six species,
+and a solid margin below the false-bridging distances seen. Still not
+exhaustive -- loosen via --systems_config if your own genomes show real
+operons this misses. One consistent negative finding worth flagging back to
+osmo_refdb rather than chasing here: `opuB`'s individual HMM/DIAMOND calls
+never once resolved to a full colocalized operon across any of the six
+species tested (always 1-2 of 3 mandatory subunits, never all three) --
+consistent with the cross-paralog confusion with opuAC/opuCC already noted
+in osmo_refdb's families.yaml (shared PF04069), not a bug in this layer.
 """
 
 from __future__ import annotations
@@ -69,11 +109,12 @@ class SystemDef:
         Proximity window for colocalization -- BOTH must hold (genes as the
         primary, length-robust unit; bp as a sanity bound so a handful of
         unusually short/long intervening ORFs can't silently blow the
-        window open). These are the extension spec's suggested defaults
-        (8 genes / 8000bp), shipped as configurable-but-UNCALIBRATED
-        starting points -- see this project's README for the calibration
-        caveat and --systems_config for overriding them per system without
-        touching code.
+        window open). Defaults (3 genes / 2000bp) are calibrated against
+        real operons (see this module's docstring for the evidence), not
+        the extension spec's untested 8-gene/8000bp suggestion -- still
+        based on a small sample, so treat as a solid starting point rather
+        than final. See this project's README, and --systems_config for
+        overriding them per system without touching code.
     fusion_label / fusion_slots:
         Some lineages carry two adjacent mandatory subunits as a single
         fused ORF. When set, a hit whose family label is exactly
@@ -84,8 +125,8 @@ class SystemDef:
     name: str
     mandatory: tuple[frozenset[str], ...]
     accessory: frozenset[str] = frozenset()
-    max_distance_genes: int = 8
-    max_distance_bp: int = 8000
+    max_distance_genes: int = 3
+    max_distance_bp: int = 2000
     fusion_label: str | None = None
     fusion_slots: frozenset[str] = frozenset()
 
@@ -239,6 +280,17 @@ def _slot_satisfied_on_contig(
     return out
 
 
+def _build_strand_index(orf_coords: dict[str, OrfCoord]) -> dict[str, dict[int, int]]:
+    """{contig: {gene_index: strand}} for EVERY predicted ORF (not just
+    system-family hits) -- lets _strand_consistent check whether a gene of
+    ANY kind sitting between two hits breaks the single-strand run a real
+    operon should be, not just the strand of the two hits themselves."""
+    index: dict[str, dict[int, int]] = defaultdict(dict)
+    for coord in orf_coords.values():
+        index[coord.contig][coord.gene_index] = coord.strand
+    return dict(index)
+
+
 def _within_window(a: _Hit, b: _Hit, sys_def: SystemDef) -> bool:
     intervening_genes = abs(a.coord.gene_index - b.coord.gene_index) - 1
     bp_distance = max(a.coord.start, b.coord.start) - min(a.coord.end, b.coord.end)
@@ -248,16 +300,58 @@ def _within_window(a: _Hit, b: _Hit, sys_def: SystemDef) -> bool:
     )
 
 
+def _strand_consistent(a: _Hit, b: _Hit, strand_index: dict[str, dict[int, int]]) -> bool:
+    """
+    A real operon is transcribed as one contiguous block on a single strand.
+    Calibration-free complement to the distance window (see detect_systems'
+    docstring): requires *a* and *b* to be on the same strand, AND no ORF of
+    ANY kind strictly between them (by gene_index, same contig) to sit on
+    the opposite strand -- a stronger check than "the two hits share a
+    strand", which alone wouldn't catch e.g. two same-strand hits that are
+    actually in different transcriptional units separated by an
+    opposite-strand gene.
+
+    Checked against real B. subtilis/E. coli data: every real operon tested
+    (mrp, opuA, opuC, otsBA) is a single unbroken same-strand run. This is
+    a complementary signal, not a substitute for the distance window --
+    e.g. E. coli's trkA/trkH (hundreds of genes apart, not a real operon)
+    also happen to share a strand, so distance is still what rejects it.
+    """
+    if a.coord.strand != b.coord.strand:
+        return False
+    lo, hi = sorted((a.coord.gene_index, b.coord.gene_index))
+    contig_strands = strand_index.get(a.coord.contig, {})
+    return all(
+        contig_strands.get(idx, a.coord.strand) == a.coord.strand
+        for idx in range(lo + 1, hi)
+    )
+
+
 def _contig_is_colocalized(
-    contig: str, sys_def: SystemDef, hits_by_family: dict[str, list[_Hit]]
+    contig: str,
+    sys_def: SystemDef,
+    hits_by_family: dict[str, list[_Hit]],
+    strand_index: dict[str, dict[int, int]],
 ) -> tuple[bool, list[_Hit]]:
     """
     Return (colocalized, chosen_hits) for *contig*: whether every mandatory
     slot has >=1 hit on this contig with SOME combination (one hit per slot)
-    all pairwise within the proximity window. Systems here have at most a
-    handful of mandatory slots and typically 1-2 hits per family on a given
-    contig, so exhaustively trying every combination is cheap and avoids the
-    false negatives a single-candidate-per-slot greedy pick would produce.
+    forming one contiguous run -- i.e. every CONSECUTIVE pair, after sorting
+    the combination by gene_index, is within the proximity window AND
+    strand-consistent (see _within_window / _strand_consistent). This is
+    deliberately a chain constraint, not "every pair of mandatory hits
+    within the window" (a clique constraint): real calibration against
+    Bacillus subtilis 168's mrp operon (mrpA-G) showed mrpA and mrpE --
+    both mandatory, but with the non-mandatory mrpD sitting directly
+    between them -- span more bp than any flat per-system budget should
+    have to cover, even though every adjacent gene pair in the real operon
+    is essentially back-to-back. A clique constraint would incorrectly
+    reject that real operon; the chain constraint doesn't, while still
+    catching genuinely scattered hits (each adjacent gap still has to be
+    tight). Systems here have at most a handful of mandatory slots and
+    typically 1-2 hits per family on a given contig, so exhaustively trying
+    every combination is cheap and avoids the false negatives a single-
+    candidate-per-slot greedy pick would produce.
     """
     per_slot_candidates = [
         _slot_satisfied_on_contig(slot, hits_by_family, contig) for slot in sys_def.mandatory
@@ -266,9 +360,11 @@ def _contig_is_colocalized(
         return False, []
 
     for combo in itertools.product(*per_slot_candidates):
+        ordered = sorted(combo, key=lambda h: h.coord.gene_index)
         if all(
-            _within_window(combo[i], combo[j], sys_def)
-            for i in range(len(combo)) for j in range(i + 1, len(combo))
+            _within_window(ordered[i], ordered[i + 1], sys_def)
+            and _strand_consistent(ordered[i], ordered[i + 1], strand_index)
+            for i in range(len(ordered) - 1)
         ):
             return True, list(combo)
     return False, []
@@ -287,12 +383,17 @@ def detect_systems(
         same per-gene calls already used for gene_counts.tsv, not a
         separate detection pass.
     orf_coords:
-        {orf_id: OrfCoord} from functions.parse_orf_coordinates(). An empty
-        dict (e.g. non-Prodigal --proteins headers) means no ORF has known
-        coordinates, so every system comes back with subunit_count=0-only
-        detection is impossible -- callers should skip writing systems
-        output entirely in that case (see runners.run_annotate).
+        {orf_id: OrfCoord} for EVERY predicted ORF (not just osmoadaptation
+        family hits), from functions.parse_orf_coordinates() -- the strand-
+        consistency check (_strand_consistent) needs the full set to tell
+        whether some *other* gene sitting between two hits breaks a
+        same-strand run. An empty dict (e.g. non-Prodigal --proteins
+        headers) means no ORF has known coordinates, so every system comes
+        back with subunit_count=0-only detection is impossible -- callers
+        should skip writing systems output entirely in that case (see
+        runners.run_annotate).
     """
+    strand_index = _build_strand_index(orf_coords)
     calls: dict[str, SystemCall] = {}
     for name, sys_def in systems.items():
         hits_by_family = _collect_hits(best_hits, orf_coords, sys_def)
@@ -318,7 +419,7 @@ def detect_systems(
         colocalized_contig = None
         chosen_hits: list[_Hit] = []
         for contig in sorted(candidate_contigs):
-            ok, chosen = _contig_is_colocalized(contig, sys_def, hits_by_family)
+            ok, chosen = _contig_is_colocalized(contig, sys_def, hits_by_family, strand_index)
             if ok:
                 colocalized_contig = contig
                 chosen_hits = chosen

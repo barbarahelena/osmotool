@@ -99,13 +99,15 @@ class TestProximityWindow:
         return best_hits, orf_coords
 
     def test_within_default_window_present(self):
-        best_hits, orf_coords = self._build(gap_genes=8)  # exactly at the default limit
+        limit = DEFAULT_SYSTEMS["ots"].max_distance_genes
+        best_hits, orf_coords = self._build(gap_genes=limit)  # exactly at the default limit
         calls = detect_systems(best_hits, orf_coords)
         assert calls["ots"].present is True
         assert calls["ots"].colocalized is True
 
     def test_beyond_default_window_not_colocalized(self):
-        best_hits, orf_coords = self._build(gap_genes=9)  # one gene past the limit
+        limit = DEFAULT_SYSTEMS["ots"].max_distance_genes
+        best_hits, orf_coords = self._build(gap_genes=limit + 1)  # one gene past the limit
         calls = detect_systems(best_hits, orf_coords)
         call = calls["ots"]
         assert call.present is False
@@ -166,19 +168,69 @@ class TestKtrOrSlot:
         assert "ktrB" not in call.mandatory_hits
 
 
+class TestStrandConsistency:
+    """A real operon is one contiguous same-strand transcriptional unit --
+    complementary to (not a substitute for) the distance window. See
+    systems._strand_consistent's docstring."""
+
+    def _build(self, between_strand: int):
+        # otsA (gene_index 1) and otsB (gene_index 3) are within the
+        # default distance window regardless; an unrelated ORF at
+        # gene_index 2 (not itself a family hit) sits directly between them.
+        best_hits = {
+            "NODE_1_1": _hit("otsA", "NODE_1_1"),
+            "NODE_1_3": _hit("otsB", "NODE_1_3"),
+        }
+        orf_coords = {
+            "NODE_1_1": _coord("NODE_1", 1, *_gene("NODE_1", 1), strand=1),
+            "NODE_1_2": _coord("NODE_1", 2, *_gene("NODE_1", 2), strand=between_strand),
+            "NODE_1_3": _coord("NODE_1", 3, *_gene("NODE_1", 3), strand=1),
+        }
+        return best_hits, orf_coords
+
+    def test_opposite_strand_gene_between_breaks_colocalization(self):
+        best_hits, orf_coords = self._build(between_strand=-1)
+        calls = detect_systems(best_hits, orf_coords)
+        call = calls["ots"]
+        assert call.present is False
+        assert call.colocalized is False
+        # still genuinely found, just not confirmed as one operon
+        assert call.subunit_count == 2
+
+    def test_same_strand_gene_between_still_colocalizes(self):
+        best_hits, orf_coords = self._build(between_strand=1)
+        calls = detect_systems(best_hits, orf_coords)
+        assert calls["ots"].present is True
+        assert calls["ots"].colocalized is True
+
+    def test_opposite_strand_hits_never_colocalize(self):
+        best_hits = {
+            "NODE_1_1": _hit("otsA", "NODE_1_1"),
+            "NODE_1_2": _hit("otsB", "NODE_1_2"),
+        }
+        orf_coords = {
+            "NODE_1_1": _coord("NODE_1", 1, *_gene("NODE_1", 1), strand=1),
+            "NODE_1_2": _coord("NODE_1", 2, *_gene("NODE_1", 2), strand=-1),
+        }
+        calls = detect_systems(best_hits, orf_coords)
+        assert calls["ots"].present is False
+
+
 class TestLoadSystemsConfig:
     def test_override_tightens_window(self, tmp_path: Path):
+        default_limit = DEFAULT_SYSTEMS["ots"].max_distance_genes
+        tightened = 1  # strictly tighter than the default in every case tested here
         config_path = tmp_path / "systems_config.tsv"
-        config_path.write_text("system\tmax_distance_genes\tmax_distance_bp\nots\t3\t8000\n")
+        config_path.write_text(f"system\tmax_distance_genes\tmax_distance_bp\nots\t{tightened}\t8000\n")
 
         systems = load_systems_config(config_path)
-        assert systems["ots"].max_distance_genes == 3
+        assert systems["ots"].max_distance_genes == tightened
         # untouched systems keep their defaults
         assert systems["opuA"].max_distance_genes == DEFAULT_SYSTEMS["opuA"].max_distance_genes
 
-        # gap of 8 genes used to pass under the default window; a tightened
-        # window of 3 should now reject it
-        otsb_index = 2 + 8
+        # a gap that passes under the default window should be rejected
+        # under the tightened override
+        otsb_index = 2 + default_limit
         best_hits = {
             "NODE_1_1": _hit("otsA", "NODE_1_1"),
             f"NODE_1_{otsb_index}": _hit("otsB", f"NODE_1_{otsb_index}"),
@@ -187,6 +239,7 @@ class TestLoadSystemsConfig:
             "NODE_1_1": _coord("NODE_1", 1, *_gene("NODE_1", 1)),
             f"NODE_1_{otsb_index}": _coord("NODE_1", otsb_index, *_gene("NODE_1", otsb_index)),
         }
+        assert detect_systems(best_hits, orf_coords)["ots"].present is True  # sanity: passes under default
         calls = detect_systems(best_hits, orf_coords, systems)
         assert calls["ots"].present is False
 
