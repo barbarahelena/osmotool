@@ -239,6 +239,27 @@ on top of the existing per-gene calls to answer that, written to
 | `ots` | otsA, otsB | — | — |
 | `trk` | trkA, trkH | — | — |
 | `ktr` | ktrA, (ktrB *or* ktrD) | — | — |
+| `galE_murB_mazG` | galE, murB, mazG | — | — |
+
+`galE_murB_mazG` is a different KIND of system from the rest of the table — not a
+transcriptional operon, but a wider genomic-neighborhood finding: [Culligan et
+al. 2012](https://doi.org/10.1038/ismej.2012.38) (*ISME J* 6(10):1916-1925,
+PMID 22534607) found these three genes — each individually too broad a domain
+to be specific on its own (see `annotate_only`/`profile_excluded_families`
+scoping elsewhere in this README) — together on a single ~39kb metagenomic
+fosmid clone from a *Collinsella*-related organism via transposon mutagenesis,
+each independently conferring NaCl/KCl tolerance when expressed in an
+osmosensitive *E. coli* strain. Confirmed directly against *C. aerofaciens*
+ATCC 25986's own reference genome (NCBI GCF_010509075.1): `galE`/`murB` sit 1
+gene / 1701bp apart, but `mazG` is a real 23 genes / 20810bp away — with a
+strand flip in between. That's why this system alone uses a much wider window
+(30 genes / 35000bp, bounded by the fosmid's own insert size) and disables the
+strand-consistency check other systems use (`require_strand_consistency=False`
+in `systems.py` — a real, confirmed strand flip sits inside the one validated
+positive case, and there's no reason to expect one strand across a
+~20-40kb neighborhood the way there is for an actual operon). Checked against
+all seven other validation genomes: fires only on *C. aerofaciens* itself, not
+indiscriminately on every genome carrying all three genes somewhere.
 
 For each system, `systems.tsv` reports:
 
@@ -312,22 +333,42 @@ actually carry the fusion — most don't (e.g. *Bacillus* itself always keeps
 **Paralog-confusion rescue**: some osmo_refdb families are close enough paralogs
 of each other, sharing the same Pfam domain, that families.yaml documents them
 as systematically swapped for each other by DIAMOND/HMM — not just theoretically
-similar. Two such cliques are known: the substrate-binding-domain trio
-`proX`/`opuAC`/`opuBC`/`opuCC` (PF04069) and the pore-forming
-`trkH`/`ktrB`/`ktrD` (PF02386). When a mandatory subunit has zero hits under its
-own family label, but a hit under one of its documented siblings is positionally
-confirmed adjacent to another real, already-found subunit of the SAME system
-(same proximity window + strand-consistency check as everything else — never on
-sequence label alone), it's reattributed to the correct slot and reported in a
-new `rescued_hits` column (e.g. `opuBC<-opuCC`). This directly targets a real
-finding from the six-species sweep: in 4/5 Firmicutes tested, the gene right
-after a confirmed `opuBB` is a real ORF mislabeled `opuCC` — exactly the SBD
-confusion — and rescuing it is now visible in the output even when the system
-overall still isn't `present` for an unrelated reason (see below). It also fired
-correctly, unprompted, on *E. coli* (not one of the species this was tuned
-against): `opuA` — a system E. coli shouldn't have at all — resolved via a real
-`proX` gene (E. coli's own ProVWX glycine-betaine transporter, the literal
-ortholog of Firmicutes OpuA) getting correctly reattributed to `opuAC`.
+similar. When a mandatory subunit has zero hits under its own family label, but
+a hit under one of its documented siblings is positionally confirmed adjacent to
+another real, already-found subunit of the SAME system (same proximity window +
+strand-consistency check as everything else — never on sequence label alone),
+it's reattributed to the correct slot and reported in a new `rescued_hits`
+column (e.g. `opuBC<-opuCC`). This directly targets a real finding from the
+six-species sweep: in 4/5 Firmicutes tested, the gene right after a confirmed
+`opuBB` is a real ORF mislabeled `opuCC` — exactly the substrate-binding-domain
+(SBD, PF04069) confusion — and rescuing it is now visible in the output even
+when the system overall still isn't `present` for an unrelated reason (see
+below).
+
+**Important scope limit, found the hard way**: "documented cross-hit risk
+between two labels" and "these are interchangeable copies of the same
+biological thing" are not the same claim. `opuAC`/`opuBC`/`opuCC` really are
+three structurally-identical, co-occurring *paralogous copies* of the same
+recurring operon architecture (confirmed directly — *B. subtilis* carries real,
+separate `opuA` and `opuC` operons in the same genome), so rescuing among them
+is legitimate. `proX` was initially included in the same rescue clique, since
+families.yaml's negative-query design cross-excludes it from the same reference
+sets — but `proX` belongs to a different, *deliberately kept separate* system
+(ProU), not a duplicate copy of Opu (the same reasoning that got `proV`/`proW`
+deferred entirely rather than folded into `opuAA`/`opuAB`). That distinction
+was missed initially: rescuing `opuAC` from a real `proX` hit fired on *E.
+coli* and was first reported here as a validation win. It wasn't — E. coli's
+real ProVWX operon getting reattributed to `opuAC` is a false positive, not
+confirmation, and the same mechanism would very plausibly fire the same way on
+any Proteobacterium carrying a real ProU operon. `proX` is now explicitly
+excluded from the rescue clique (`systems.PARALOG_CONFUSION_CLIQUES`), with a
+regression test guarding against reintroducing it. The one other rescue clique,
+pore-forming `trkH`/`ktrB`/`ktrD` (PF02386), is treated differently — documented
+as lineage-specific naming for the *same* underlying Trk/Ktr system rather than
+two independently-arisen analogous ones — but that's this module's own reading
+of the documentation, not functionally confirmed either, and worth an
+independent check by whoever has closer domain knowledge of osmo_refdb's own
+family curation.
 
 **Known refdb-level limitation (`opuB`)**: across all six validation species,
 `opuB` never once resolved to a full colocalized operon, even with the rescue

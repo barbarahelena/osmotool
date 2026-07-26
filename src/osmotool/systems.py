@@ -122,12 +122,23 @@ class SystemDef:
         Proximity window for colocalization -- BOTH must hold (genes as the
         primary, length-robust unit; bp as a sanity bound so a handful of
         unusually short/long intervening ORFs can't silently blow the
-        window open). Defaults (3 genes / 2000bp) are calibrated against
-        real operons (see this module's docstring for the evidence), not
-        the extension spec's untested 8-gene/8000bp suggestion -- still
-        based on a small sample, so treat as a solid starting point rather
-        than final. See this project's README, and --systems_config for
-        overriding them per system without touching code.
+        window open). Set PER SYSTEM, not a single global default -- most
+        systems here are real single-operon claims calibrated tight (3
+        genes / 2000bp, see this module's docstring for the evidence), but
+        `galE_murB_mazG` is a different KIND of claim (a wider genomic
+        neighborhood, not one transcriptional unit -- see its own def
+        below) and is calibrated on its own, much looser scale. See this
+        project's README, and --systems_config for overriding a system's
+        distances without touching code.
+    require_strand_consistency:
+        Whether _strand_consistent (see detect_systems) is enforced for
+        this system. True (default) for real single-operon claims, where
+        "one contiguous same-strand transcriptional unit" is exactly what's
+        being tested. False for wider claims like `galE_murB_mazG`, where
+        there's no reason to expect one strand across a ~20-40kb genomic
+        region and enforcing it would incorrectly reject the one confirmed
+        real instance (a strand flip sits between mazG and murB/galE in
+        both the source clone and *C. aerofaciens*'s own reference genome).
     fusion_label / fusion_slots:
         Some lineages carry two adjacent mandatory subunits as a single
         fused ORF. When set, a hit whose family label is exactly
@@ -140,6 +151,7 @@ class SystemDef:
     accessory: frozenset[str] = frozenset()
     max_distance_genes: int = 3
     max_distance_bp: int = 2000
+    require_strand_consistency: bool = True
     fusion_label: str | None = None
     fusion_slots: frozenset[str] = frozenset()
 
@@ -183,6 +195,33 @@ DEFAULT_SYSTEMS: dict[str, SystemDef] = {
         name="ktr",
         mandatory=(frozenset({"ktrA"}), frozenset({"ktrB", "ktrD"})),
     ),
+    # Not a transcriptional operon -- a wider genomic-neighborhood claim.
+    # Culligan EP, Sleator RD, Marchesi JR, Hill C. "Functional metagenomics
+    # reveals novel salt tolerance loci from the human gut microbiome."
+    # ISME J. 2012;6(10):1916-1925. doi:10.1038/ismej.2012.38, PMID
+    # 22534607. A transposon-mutagenesis screen of a human gut metagenomic
+    # fosmid library found galE/murB/mazG (individually flagged elsewhere in
+    # this panel as too promiscuous a domain to be specific on their own --
+    # see quantifier.py / families.yaml) together on one ~39kb fosmid clone
+    # (clone "SMG3", closest relative Collinsella aerofaciens; locus tags
+    # COLAER_01955/01957/01981) -- each individually conferred NaCl/KCl
+    # tolerance when expressed in an osmosensitive E. coli strain. galE and
+    # murB sit close (226bp apart in the source clone; confirmed again at 1
+    # gene / 1701bp in C. aerofaciens ATCC 25986's own reference genome,
+    # NCBI GCF_010509075.1), but mazG is real genomic distance away -- 24
+    # locus tags in the source clone, confirmed at 23 genes / 20810bp in
+    # ATCC 25986, WITH a strand flip in between (hence
+    # require_strand_consistency=False here specifically). Distances set
+    # with margin above that confirmed real gap, bounded by the fosmid
+    # insert size itself (~39kb is close to a hard ceiling for "found
+    # together on one clone").
+    "galE_murB_mazG": SystemDef(
+        name="galE_murB_mazG",
+        mandatory=(frozenset({"galE"}), frozenset({"murB"}), frozenset({"mazG"})),
+        max_distance_genes=30,
+        max_distance_bp=35000,
+        require_strand_consistency=False,
+    ),
 }
 
 
@@ -198,25 +237,56 @@ DEFAULT_SYSTEMS: dict[str, SystemDef] = {
 # that subunit should be (adjacent to the system's OTHER already-confirmed
 # real subunits -- see _rescue_missing_mandatory_families), that's much
 # stronger evidence of what the gene actually is than the ambiguous
-# sequence-based label alone. Deliberately narrow: only cliques families.yaml
-# explicitly calls out as systematically swapped for each other, not every
-# family sharing a broad/promiscuous domain (e.g. NOT opuAA/opuBA/opuCA or
-# opuAB/opuBB/opuCB -- families.yaml gives them the same negative-query
-# cross-exclusion boilerplate as every other family sharing a generic
-# ABC-transporter fold, but doesn't flag them as an observed swapping
-# problem the way it does for the two cliques below, and real calibration
-# data backs that distinction up: the gene immediately upstream of a real,
-# confirmed opuB operon's opuBB is often a genuine gap -- no hit at all,
-# under any family -- not a mislabeled hit rescue could reattribute).
+# sequence-based label alone -- but it is still a POSITIONAL/sequence
+# inference, not a functional or evolutionary-identity confirmation
+# (the kind Culligan et al. actually did, by heterologous expression +
+# phenotype assay -- osmotool has no equivalent and can't produce one).
+# Deliberately narrow: only cliques families.yaml explicitly calls out as
+# systematically swapped for each other, not every family sharing a
+# broad/promiscuous domain (e.g. NOT opuAA/opuBA/opuCA or opuAB/opuBB/opuCB
+# -- families.yaml gives them the same negative-query cross-exclusion
+# boilerplate as every other family sharing a generic ABC-transporter fold,
+# but doesn't flag them as an observed swapping problem the way it does for
+# the two cliques below, and real calibration data backs that distinction
+# up: the gene immediately upstream of a real, confirmed opuB operon's
+# opuBB is often a genuine gap -- no hit at all, under any family -- not a
+# mislabeled hit rescue could reattribute).
+#
+# "Documented cross-hit risk between two labels" and "these are
+# interchangeable copies of the same biological thing" are NOT the same
+# claim, and conflating them is a real mistake this module made once
+# already (see CHANGELOG-equivalent discussion in the PR history): proX
+# was originally included alongside opuAC/opuBC/opuCC below because
+# families.yaml's negative-query construction cross-excludes all four from
+# each other's reference sets. But opuAC/opuBC/opuCC really are three
+# structurally-identical, co-occurring PARALOGOUS COPIES of the same
+# recurring operon architecture (confirmed directly: B. subtilis carries
+# real, separate opuA AND opuC operons in the same genome) -- a hit
+# mislabeled opuCC really can be opuBC's own subunit, just landed under a
+# close paralog's label. proX belongs to a different, DELIBERATELY KEPT
+# SEPARATE system (ProU) -- not a duplicate copy of Opu, but a documented
+# non-orthologous, convergently domain-similar system (the same reasoning
+# that got proV/proW deferred entirely rather than folded into
+# opuAA/opuAB). Rescuing opuAC from a real proX hit doesn't identify a
+# mislabeled Opu subunit; it conflates ProU with Opu, and would very
+# plausibly fire the same way on any Proteobacterium carrying a real ProU
+# operon, not just E. coli specifically -- proX is deliberately EXCLUDED
+# from the rescue clique below for exactly this reason (kept only as the
+# distinctly-documented negative-query relationship it actually is,
+# families.yaml's own concern, not a rescue-eligible sibling).
 _CONFUSION_CLIQUES = (
-    # SBD (substrate-binding domain), PF04069 -- families.yaml: "close
-    # enough paralogs of each other that adding them back into the
-    # searchable pool as decoys lets them systematically outcompete a
-    # family's own thin reference set".
-    frozenset({"proX", "opuAC", "opuBC", "opuCC"}),
-    # Pore-forming subunit, PF02386 -- families.yaml/CHANGELOG.md: "share
-    # PF02386 the same close-paralog way proX/opuAC/opuBC/opuCC shared
-    # PF04069".
+    # SBD (substrate-binding domain), PF04069 -- proX deliberately
+    # excluded, see the block comment above.
+    frozenset({"opuAC", "opuBC", "opuCC"}),
+    # Pore-forming subunit, PF02386. Treated differently from the SBD case
+    # above: trkH (Proteobacteria naming) and ktrB/ktrD (Firmicutes naming)
+    # are documented in families.yaml as the SAME underlying Trk/Ktr
+    # K+-uptake system under lineage-specific naming conventions, not two
+    # independently-arisen analogous systems the way ProU/Opu are -- but
+    # this is this module's own reading of that documentation, not
+    # something functionally confirmed either. Worth an independent check
+    # by whoever has closer domain knowledge of osmo_refdb's own family
+    # curation before trusting it as firmly as the SBD case's exclusion.
     frozenset({"trkH", "ktrB", "ktrD"}),
 )
 
@@ -258,6 +328,7 @@ def load_systems_config(
                 accessory=sys_def.accessory,
                 max_distance_genes=genes,
                 max_distance_bp=bp,
+                require_strand_consistency=sys_def.require_strand_consistency,
                 fusion_label=sys_def.fusion_label,
                 fusion_slots=sys_def.fusion_slots,
             )
@@ -519,7 +590,10 @@ def _contig_is_colocalized(
         ordered = sorted(combo, key=lambda h: h.coord.gene_index)
         if all(
             _within_window(ordered[i], ordered[i + 1], sys_def)
-            and _strand_consistent(ordered[i], ordered[i + 1], strand_index)
+            and (
+                not sys_def.require_strand_consistency
+                or _strand_consistent(ordered[i], ordered[i + 1], strand_index)
+            )
             for i in range(len(ordered) - 1)
         ):
             return True, list(combo)
