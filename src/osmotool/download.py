@@ -25,8 +25,9 @@ ZENODO_API = "https://zenodo.org/api/records/{record_id}"
 
 RELEASES: dict[str, str] = {
     "v5": "21420253",
+    "v7": "21600046",
 }
-LATEST_RELEASE = "v5"
+LATEST_RELEASE = "v7"
 
 
 def _resolve_release(release: str) -> str:
