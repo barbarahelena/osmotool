@@ -20,9 +20,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="osmotool",
         description=(
             "Screen osmoadaptation genes in metagenomic datasets using DIAMOND "
-            "and HMMER. "
-            "Gene families: ectA, ectB, ectC (ectoine), betL (betaine transport), "
-            "kdpA (K⁺ uptake), nhaA (Na⁺/H⁺ antiporter)."
+            "and HMMER. The gene panel itself (which families are searched) is "
+            "defined entirely by the osmo_refdb release passed as DATABASE -- "
+            "see that release's families.yaml / README for the current panel, "
+            "rather than a fixed list baked into osmotool."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
@@ -254,6 +255,24 @@ def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--keep_proteins", action="store_true", default=False,
         help="Keep the Prodigal protein FASTA (ignored when --proteins is given).",
+    )
+
+    systems = p.add_argument_group("multi-subunit system detection")
+    systems.add_argument(
+        "--skip_systems", action="store_true", default=False,
+        help="Skip the complex/system-aware detection layer (e.g. opuA, mrp) "
+             "-- no <out_prefix>.systems.tsv, no ORF-coordinate parsing. Off "
+             "by default.",
+    )
+    systems.add_argument(
+        "--systems_config", default=None, metavar="TSV",
+        help="Optional TSV overriding each system's max_distance_genes/"
+             "max_distance_bp proximity window (columns: system, "
+             "max_distance_genes, max_distance_bp). The shipped defaults "
+             "(8 genes / 8000bp) are UNCALIBRATED starting points from the "
+             "extension spec -- see systems.py / README before trusting "
+             "them in production. Mandatory/accessory/fusion membership is "
+             "not overridable this way.",
     )
 
     _add_filter_args(p)

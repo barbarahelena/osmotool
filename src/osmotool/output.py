@@ -6,6 +6,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from osmotool.systems import SystemCall
 
 log = logging.getLogger("osmotool")
 
@@ -92,6 +96,18 @@ def write_aln_stats(
 # Stats helpers
 # ---------------------------------------------------------------------------
 
+#: Task 3 -- explicit read-mode note carried into profile mode's aln_stats.tsv
+#: (see run_profile's docstring in runners.py for the full rationale). Not a
+#: log-only warning: this is written into the actual output file so it
+#: survives past the terminal a run happened in.
+PROFILE_SYSTEMS_NOTE = (
+    "multi-subunit system calls (opuA/opuB/opuC/mrp/ect/ots/trk/ktr) are NOT "
+    "confirmed co-located in read-profiling mode -- abundances below are per-gene "
+    "and independent; a system-level 'present' claim requires annotate mode "
+    "(or a dedicated assembly+binning step) on the same samples"
+)
+
+
 def build_aln_stats(
     *,
     mode: str,
@@ -103,8 +119,13 @@ def build_aln_stats(
     min_query_cover: float,
     evalue: float,
     min_subject_cover: float = 0.0,
+    note_systems: str | None = None,
 ) -> dict:
-    """Return a flat dict of summary statistics for :func:`write_aln_stats`."""
+    """Return a flat dict of summary statistics for :func:`write_aln_stats`.
+
+    note_systems: profile mode passes PROFILE_SYSTEMS_NOTE (Task 3); annotate
+    mode leaves this None since it has its own systems.tsv output instead.
+    """
     total_assigned = sum(counts.values())
     pct_assigned = (
         (total_assigned / filtered_reads * 100) if filtered_reads > 0 else 0.0
@@ -121,7 +142,52 @@ def build_aln_stats(
         "min_subject_cover":   min_subject_cover,
         "evalue":              evalue,
     }
+    if note_systems is not None:
+        stats["note_systems"] = note_systems
     # per-family breakdown
     for fam, cnt in sorted(counts.items()):
         stats[f"count_{fam}"] = f"{cnt:.1f}"
     return stats
+
+
+# ---------------------------------------------------------------------------
+# systems.tsv (annotate mode only -- see systems.detect_systems)
+# ---------------------------------------------------------------------------
+
+def write_system_calls(
+    out_prefix: str | Path,
+    calls: dict[str, "SystemCall"],
+) -> Path:
+    """
+    Write ``<out_prefix>.systems.tsv``: one row per multi-subunit system
+    (see systems.DEFAULT_SYSTEMS), reporting whether its mandatory subunits
+    were found co-located within a proximity window on the same contig.
+
+    Format::
+
+        system  present subunit_count   colocalized fragmented_assembly_flag   contig  mandatory_hits  accessory_hits
+        opuA    True    3               True        False                      NODE_1  opuAA,opuAB,opuAC   -
+        mrp     False   2               False       True                       -       mrpA,mrpC       -
+
+    present/colocalized/fragmented_assembly_flag: see systems.detect_systems's
+    docstring for exactly what each means and how they're distinguished.
+    """
+    out_path = Path(str(out_prefix) + ".systems.tsv")
+
+    with open(out_path, "w") as fh:
+        fh.write(
+            "system\tpresent\tsubunit_count\tcolocalized\t"
+            "fragmented_assembly_flag\tcontig\tmandatory_hits\taccessory_hits\n"
+        )
+        for name in sorted(calls):
+            call = calls[name]
+            fh.write(
+                f"{call.system}\t{call.present}\t{call.subunit_count}\t"
+                f"{call.colocalized}\t{call.fragmented_assembly_flag}\t"
+                f"{call.contig or '-'}\t"
+                f"{','.join(call.mandatory_hits) or '-'}\t"
+                f"{','.join(call.accessory_hits) or '-'}\n"
+            )
+
+    log.info("Wrote system calls → %s", out_path)
+    return out_path

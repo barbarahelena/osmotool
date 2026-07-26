@@ -9,6 +9,7 @@ import logging
 import re
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
@@ -570,6 +571,61 @@ def parse_protein_lengths(proteins_faa: str | Path) -> dict[str, int]:
     if current_id is not None:
         lengths[current_id] = current_len
     return lengths
+
+
+@dataclass(frozen=True)
+class OrfCoord:
+    """One ORF's coordinates, parsed from a Prodigal-style protein header."""
+    contig: str
+    gene_index: int
+    start: int
+    end: int
+    strand: int
+
+
+# Prodigal's default protein FASTA header shape:
+#   >NODE_1_length_50000_cov_5.0_7 # 1801 # 2400 # 1 # ID=1_7;partial=00;...
+# i.e. "<contig>_<gene_index> # <start> # <end> # <strand> # ...". gene_index
+# is Prodigal's own 1-based, per-contig sequential gene number, so
+# abs(idx_a - idx_b) - 1 directly gives "number of intervening genes" with no
+# extra bookkeeping. Matches the same trailing "_<index>" convention
+# parse_protein_lengths() already relies on for the ID itself.
+PRODIGAL_HEADER_RE = re.compile(
+    r"^(?P<contig>.+)_(?P<gene_index>\d+)\s+#\s*(?P<start>\d+)\s*#\s*(?P<end>\d+)\s*#\s*(?P<strand>-?1)\s*#"
+)
+
+
+def parse_orf_coordinates(proteins_faa: str | Path) -> dict[str, OrfCoord]:
+    """
+    Parse a Prodigal protein FASTA and return {protein_id: OrfCoord}.
+
+    Best-effort: a header that doesn't match Prodigal's own
+    "<contig>_<gene_index> # start # end # strand # ..." shape is silently
+    skipped rather than raising -- this is what lets the `annotate`
+    --proteins path (pre-called, possibly non-Prodigal proteins) degrade
+    gracefully to "systems detection skipped" instead of crashing (see
+    systems.detect_systems callers in runners.run_annotate).
+
+    Returns an empty dict if no header matched at all.
+    """
+    coords: dict[str, OrfCoord] = {}
+    with open(proteins_faa) as fh:
+        for line in fh:
+            if not line.startswith(">"):
+                continue
+            header = line[1:].rstrip("\n")
+            protein_id = header.split()[0]
+            m = PRODIGAL_HEADER_RE.match(header)
+            if not m:
+                continue
+            coords[protein_id] = OrfCoord(
+                contig=m.group("contig"),
+                gene_index=int(m.group("gene_index")),
+                start=int(m.group("start")),
+                end=int(m.group("end")),
+                strand=int(m.group("strand")),
+            )
+    return coords
 
 
 def count_reads(

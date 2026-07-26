@@ -173,6 +173,7 @@ osmotool annotate \
 |---|---|
 | `<prefix>.gene_counts.tsv` | Per-gene raw counts and normalised value (`rpm` or `copies_per_kb`, depending on mode) |
 | `<prefix>.aln_stats.tsv` | Summary statistics |
+| `<prefix>.systems.tsv` | `annotate` only — multi-subunit system calls (see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only) below) |
 
 ### `gene_counts.tsv` format
 
@@ -216,6 +217,116 @@ different (community-level read abundance).
 
 **Paired-end counting**: each read of a pair counts as 0.5 (one read pair = one fragment).
 
+## Multi-subunit systems (`annotate` mode only)
+
+Several osmoadaptation gene families are not single-ORF genes but subunits of one
+multi-subunit system — e.g. the OpuA glycine-betaine ABC transporter (`opuAA` +
+`opuAB` + `opuAC`) or the Firmicutes Mrp/Mnh Na⁺/H⁺ antiporter complex (`mrpA`
+through `mrpG`, the Bacillota substitute for `nhaA`). Scoring each subunit gene
+independently (as `gene_counts.tsv` does) can't tell you whether a genome actually
+has the assembled complex versus just some of its subunits scattered around an
+unrelated part of the genome. `annotate` mode adds a proximity/co-occurrence layer
+on top of the existing per-gene calls to answer that, written to
+`<prefix>.systems.tsv`:
+
+| system | mandatory subunits | accessory | fusion |
+|---|---|---|---|
+| `opuA` | opuAA, opuAB, opuAC | — | — |
+| `opuB` | opuBA, opuBB, opuBC | — | — |
+| `opuC` | opuCA, opuCB, opuCC | — | — |
+| `mrp` | mrpA, mrpB, mrpC, mrpE | mrpD, mrpF, mrpG | mrpA+mrpB may occur as one fused ORF (`mrpA_mrpB_fused`) |
+| `ect` | ectA, ectB, ectC | — | — |
+| `ots` | otsA, otsB | — | — |
+| `trk` | trkA, trkH | — | — |
+| `ktr` | ktrA, (ktrB *or* ktrD) | — | — |
+
+For each system, `systems.tsv` reports:
+
+| Column | Meaning |
+|---|---|
+| `present` | Every mandatory subunit was found co-located (within the proximity window) on one contig |
+| `subunit_count` | How many mandatory+accessory subunits were found *anywhere* in the assembly, regardless of proximity |
+| `colocalized` | Whether `present` was proximity-confirmed (mirrors `present`; kept as its own column for clarity) |
+| `fragmented_assembly_flag` | Subunits were found, but on ≥2 different contigs, so colocalization genuinely can't be evaluated — distinct from subunits simply being too far apart on the *same* contig, which is a real "not colocalized" call, not a fragmentation call |
+| `contig` | The contig the system was called present on (`-` otherwise) |
+| `mandatory_hits` / `accessory_hits` | Which families were actually found |
+
+**Proximity window**: a system counts as colocalized when the mandatory subunits,
+sorted by genomic position, form one contiguous run — every *consecutive* pair
+within `max_distance_genes` intervening genes (default 3) **and**
+`max_distance_bp` (default 2000), **and** strand-consistent (see below). This is
+a chain constraint (adjacent pairs), not "every subunit within the window of
+every other subunit" — that clique version incorrectly rejects real operons
+where a non-mandatory subunit sits between two mandatory ones (e.g. `mrp`'s
+accessory `mrpD` sitting directly between mandatory `mrpC` and `mrpE`).
+
+These defaults replace the extension spec's untested 8-gene/8000bp suggestion —
+checked instead against real complete-genome operons across six species:
+`mrpA`-`G` (*B. subtilis* 168, *S. aureus* NCTC 8325, *L. monocytogenes* EGD-e,
+*H. elongata* DSM 2581), `opuABC` (*B. subtilis*, *L. monocytogenes*), `opuCABC`
+(*B. subtilis*, *S. aureus*, *L. monocytogenes*, *E. faecalis* V583), `ectABC`
+(*H. elongata* — the actual ectoine-discovery organism), and `otsBA`
+(*E. coli* K-12) are **all** 0 intervening genes apart (gaps of -34 to +93bp,
+essentially back-to-back CDSs) regardless of species. STRING's independently
+precomputed gene-neighborhood score for *B. subtilis* `mrpA`/`mrpB` corroborates
+this (0.803/1.0). MacSyFinder/TXSScan's own expert-curated models
+([github.com/macsy-models](https://github.com/macsy-models)) converge on a
+similar range for comparably-sized, similarly tightly-packed operons —
+CasFinder's CRISPR-Cas models (7-9 genes, `mrp`'s scale) use
+`inter_gene_max_space=3`; TXSScan's small transport systems like T1SS/T2SS
+(3-4 genes, `opuA`/`ots`'s scale) use 5. Only genuinely large, multi-locus
+machinery (T6SS, the flagellum — nothing in this panel is that complex) goes
+up to 20.
+
+The same sweep also surfaced a real false-bridging risk the spec's original
+window didn't guard against: several species carry a duplicate/paralogous copy
+of the same operon nearby, always on the **opposite strand** — e.g. *H.
+elongata*'s second `mrp`-like cluster sits immediately adjacent to the first (0
+genes / 236bp), comfortably inside even the *tightened* window. Distance alone
+can't reliably reject that — which is exactly what the strand-consistency check
+below is for. 3 genes / 2000bp (matching CasFinder's precedent exactly) keeps a
+solid margin above every real operon gap observed across all six species —
+still not exhaustive, so treat it as a solid starting point rather than final
+(see `--systems_config` below to override per system without touching code).
+
+**Strand consistency**: a real operon is transcribed as one contiguous block on
+a single strand, so alongside the distance window, every consecutive pair of
+chosen subunits must (a) share a strand, and (b) have no gene *of any kind* on
+the opposite strand sitting between them. This is calibration-free (binary, no
+threshold to pick) and directly motivated by the duplicate-locus finding above
+— checked against all six species with zero false rejections of a real operon.
+It's a genuine complement to, not a substitute for, the distance check: e.g.
+*E. coli*'s `trkA`/`trkH` (hundreds of genes apart, not a real operon) happen to
+share a strand too, so distance is what actually rejects that case.
+
+**Fusion handling**: some lineages carry `mrpA`+`mrpB` as a single fused ORF.
+osmo_refdb ships a dedicated `mrpA_mrpB_fused` DIAMOND reference for this — a hit
+against it satisfies both subunits from one ORF. There's no equivalent fused HMM
+profile, so this is currently a **DIAMOND-only** capability; `--method hmm` will
+undercount the fused case (same limitation as any single-best-hit-per-ORF scoring
+scheme applied to a genuine multi-domain fusion protein) for the lineages that
+actually carry the fusion — most don't (e.g. *Bacillus* itself always keeps
+`mrpA`/`mrpB` split).
+
+**Known refdb-level limitation (`opuB`)**: across all six validation species,
+`opuB` never once resolved to a full colocalized operon — always 1-2 of its 3
+mandatory subunits, never all three, and a different subset per species/method.
+This traces to a real precision issue in osmo_refdb's individual `opuBA`/
+`opuBB`/`opuBC` HMM/DIAMOND models (documented cross-paralog confusion with
+`opuAC`/`opuCC` via shared Pfam PF04069, not something this detection layer can
+fix — it's correctly reflecting noisy upstream per-gene calls rather than
+manufacturing false confidence).
+
+Relevant flags (see [Parameters](#parameters)): `--skip_systems` to disable this
+layer entirely, `--systems_config` to override the proximity window per system.
+
+**Not available in `profile` mode**: read-based profiling has no contig-level
+coordinates at typical short-read lengths, so colocalization simply isn't
+checkable there. `profile` reports each gene family's abundance independently
+(unchanged) and carries an explicit `note_systems` line in `aln_stats.tsv` saying
+so — a system-level "present" claim requires `annotate` mode (or a dedicated
+assembly+binning step) on the same samples.
+
 ## Parameters
 
 | Parameter | Default | Description |
@@ -232,6 +343,8 @@ different (community-level read abundance).
 | `--cascade` | off | `profile` only. Give reads whose DIAMOND call lands on a family with demonstrated precision problems a second opinion from `hmmscan`, using `DATABASE`'s `osmo_refdb.profile_cascade.tsv` + `hmms/osmo_refdb.hmm`. Requires `orfm`+`hmmscan` on PATH, and both files present in `DATABASE` |
 | `--proteins` | none | `annotate` only. Pre-called protein FASTA (skip Prodigal) |
 | `--keep_aln` / `--keep_proteins` | off | Retain intermediate alignment/protein files instead of deleting them after the run |
+| `--skip_systems` | off | `annotate` only. Skip the [multi-subunit systems](#multi-subunit-systems-annotate-mode-only) layer entirely — no `<prefix>.systems.tsv`, no ORF-coordinate parsing |
+| `--systems_config` | none | `annotate` only. TSV overriding `max_distance_genes`/`max_distance_bp` per system (columns: `system`, `max_distance_genes`, `max_distance_bp`) — see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only) |
 
 DIAMOND per-family cutoffs (`osmo_refdb.diamond_cutoffs.tsv`) and
 scope-excluded-families reporting filters
