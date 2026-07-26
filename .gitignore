@@ -11,3 +11,6 @@ htmlcov/
 # Environments
 .venv/
 venv/
+
+# Local tool settings
+.claude/
