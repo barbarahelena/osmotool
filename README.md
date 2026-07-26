@@ -472,31 +472,6 @@ FASTQ lands there instead of on the shared filesystem.
 `--total_reads` accepts a pre-computed count (e.g. from FastQC/MultiQC)
 to skip the `zcat | wc -l` step on very large files.
 
-## Use in Nextflow
-
-```nextflow
-process OSMOTOOL_PROFILE {
-    container 'barbarahelena/osmotool:latest'
-
-    input:
-    tuple val(sample), path(r1), path(r2)
-    path osmo_refdb_dir
-
-    output:
-    tuple val(sample), path("${sample}.gene_counts.tsv"), emit: counts
-    tuple val(sample), path("${sample}.aln_stats.tsv"),  emit: stats
-
-    script:
-    """
-    osmotool profile \\
-        ${osmo_refdb_dir} \\
-        -1 ${r1} -2 ${r2} \\
-        --out_prefix ${sample} \\
-        --threads ${task.cpus}
-    """
-}
-```
-
 ## Versioning
 
 Versions are tied to git tags using `setuptools-scm`:
