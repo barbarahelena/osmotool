@@ -250,6 +250,7 @@ For each system, `systems.tsv` reports:
 | `fragmented_assembly_flag` | Subunits were found, but on ≥2 different contigs, so colocalization genuinely can't be evaluated — distinct from subunits simply being too far apart on the *same* contig, which is a real "not colocalized" call, not a fragmentation call |
 | `contig` | The contig the system was called present on (`-` otherwise) |
 | `mandatory_hits` / `accessory_hits` | Which families were actually found |
+| `rescued_hits` | `<family><-original_label>` entries for any subunit reattributed via paralog-confusion rescue (see below) instead of found under its own label |
 
 **Proximity window**: a system counts as colocalized when the mandatory subunits,
 sorted by genomic position, form one contiguous run — every *consecutive* pair
@@ -308,14 +309,35 @@ scheme applied to a genuine multi-domain fusion protein) for the lineages that
 actually carry the fusion — most don't (e.g. *Bacillus* itself always keeps
 `mrpA`/`mrpB` split).
 
+**Paralog-confusion rescue**: some osmo_refdb families are close enough paralogs
+of each other, sharing the same Pfam domain, that families.yaml documents them
+as systematically swapped for each other by DIAMOND/HMM — not just theoretically
+similar. Two such cliques are known: the substrate-binding-domain trio
+`proX`/`opuAC`/`opuBC`/`opuCC` (PF04069) and the pore-forming
+`trkH`/`ktrB`/`ktrD` (PF02386). When a mandatory subunit has zero hits under its
+own family label, but a hit under one of its documented siblings is positionally
+confirmed adjacent to another real, already-found subunit of the SAME system
+(same proximity window + strand-consistency check as everything else — never on
+sequence label alone), it's reattributed to the correct slot and reported in a
+new `rescued_hits` column (e.g. `opuBC<-opuCC`). This directly targets a real
+finding from the six-species sweep: in 4/5 Firmicutes tested, the gene right
+after a confirmed `opuBB` is a real ORF mislabeled `opuCC` — exactly the SBD
+confusion — and rescuing it is now visible in the output even when the system
+overall still isn't `present` for an unrelated reason (see below). It also fired
+correctly, unprompted, on *E. coli* (not one of the species this was tuned
+against): `opuA` — a system E. coli shouldn't have at all — resolved via a real
+`proX` gene (E. coli's own ProVWX glycine-betaine transporter, the literal
+ortholog of Firmicutes OpuA) getting correctly reattributed to `opuAC`.
+
 **Known refdb-level limitation (`opuB`)**: across all six validation species,
-`opuB` never once resolved to a full colocalized operon — always 1-2 of its 3
-mandatory subunits, never all three, and a different subset per species/method.
-This traces to a real precision issue in osmo_refdb's individual `opuBA`/
-`opuBB`/`opuBC` HMM/DIAMOND models (documented cross-paralog confusion with
-`opuAC`/`opuCC` via shared Pfam PF04069, not something this detection layer can
-fix — it's correctly reflecting noisy upstream per-gene calls rather than
-manufacturing false confidence).
+`opuB` never once resolved to a full colocalized operon, even with the rescue
+above — always 1-2 of its 3 mandatory subunits. The rescue fixes the `opuBC`
+side (a real labeling ambiguity), but the other blocker, `opuBA`, is a different
+problem: in every species checked, there's no hit *at all*, under any family, at
+the position where it should be. That's a genuine HMM/DIAMOND recall gap in
+osmo_refdb's `opuBA` model, not a mislabeling — no positional reasoning can
+invent evidence that isn't there. Worth flagging back to osmo_refdb as a
+separate, distinct finding from the SBD confusion.
 
 Relevant flags (see [Parameters](#parameters)): `--skip_systems` to disable this
 layer entirely, `--systems_config` to override the proximity window per system.

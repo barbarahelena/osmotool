@@ -168,6 +168,83 @@ class TestKtrOrSlot:
         assert "ktrB" not in call.mandatory_hits
 
 
+class TestParalogRescue:
+    """Positional rescue for osmo_refdb's documented paralog-confusion
+    cliques (systems.PARALOG_CONFUSION_CLIQUES) -- see
+    systems._rescue_missing_mandatory_families's docstring. Mirrors the real
+    finding on B. subtilis/S. aureus/etc.: opuBC gets systematically
+    mislabeled opuCC (shared PF04069 substrate-binding domain), but only
+    counts as opuBC when positionally confirmed adjacent to a real opuB
+    subunit -- never on label alone."""
+
+    def test_rescues_opuBC_via_mislabeled_opuCC(self):
+        best_hits = {
+            "NODE_1_1": _hit("opuBA", "NODE_1_1"),
+            "NODE_1_2": _hit("opuBB", "NODE_1_2"),
+            "NODE_1_3": _hit("opuCC", "NODE_1_3"),  # really opuBC, mislabeled
+        }
+        orf_coords = {
+            f"NODE_1_{i}": _coord("NODE_1", i, *_gene("NODE_1", i)) for i in (1, 2, 3)
+        }
+        calls = detect_systems(best_hits, orf_coords)
+        call = calls["opuB"]
+        assert call.present is True
+        assert call.colocalized is True
+        assert "opuBC" in call.mandatory_hits
+        assert call.rescued_hits == ("opuBC<-opuCC",)
+
+    def test_rescue_alone_does_not_flip_present_when_another_slot_is_genuinely_missing(self):
+        # opuBA has NO hit anywhere (a real recall gap, not a labeling
+        # issue) -- rescuing opuBC still can't make the system present.
+        best_hits = {
+            "NODE_1_1": _hit("opuBB", "NODE_1_1"),
+            "NODE_1_2": _hit("opuCC", "NODE_1_2"),  # really opuBC, mislabeled
+        }
+        orf_coords = {
+            f"NODE_1_{i}": _coord("NODE_1", i, *_gene("NODE_1", i)) for i in (1, 2)
+        }
+        calls = detect_systems(best_hits, orf_coords)
+        call = calls["opuB"]
+        assert call.present is False
+        # but the rescue is still surfaced, precisely the useful signal
+        # even though the system overall isn't present
+        assert call.rescued_hits == ("opuBC<-opuCC",)
+        assert "opuBC" in call.mandatory_hits
+
+    def test_rescue_requires_positional_confirmation_not_label_alone(self):
+        # an "opuCC"-labeled hit far from any real opuB subunit must NOT
+        # be rescued -- there's no anchor to justify the reattribution.
+        best_hits = {
+            "NODE_1_1": _hit("opuBA", "NODE_1_1"),
+            "NODE_1_2": _hit("opuBB", "NODE_1_2"),
+            "NODE_1_500": _hit("opuCC", "NODE_1_500"),  # far away, unrelated
+        }
+        orf_coords = {
+            "NODE_1_1": _coord("NODE_1", 1, *_gene("NODE_1", 1)),
+            "NODE_1_2": _coord("NODE_1", 2, *_gene("NODE_1", 2)),
+            "NODE_1_500": _coord("NODE_1", 500, *_gene("NODE_1", 500)),
+        }
+        calls = detect_systems(best_hits, orf_coords)
+        call = calls["opuB"]
+        assert call.present is False
+        assert call.rescued_hits == ()
+        assert "opuBC" not in call.mandatory_hits
+
+    def test_trk_rescues_trkH_via_mislabeled_ktrB(self):
+        best_hits = {
+            "NODE_1_1": _hit("trkA", "NODE_1_1"),
+            "NODE_1_2": _hit("ktrB", "NODE_1_2"),  # really trkH, mislabeled
+        }
+        orf_coords = {
+            "NODE_1_1": _coord("NODE_1", 1, *_gene("NODE_1", 1)),
+            "NODE_1_2": _coord("NODE_1", 2, *_gene("NODE_1", 2)),
+        }
+        calls = detect_systems(best_hits, orf_coords)
+        call = calls["trk"]
+        assert call.present is True
+        assert call.rescued_hits == ("trkH<-ktrB",)
+
+
 class TestStrandConsistency:
     """A real operon is one contiguous same-strand transcriptional unit --
     complementary to (not a substitute for) the distance window. See

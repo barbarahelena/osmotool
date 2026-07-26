@@ -165,19 +165,30 @@ def write_system_calls(
 
     Format::
 
-        system  present subunit_count   colocalized fragmented_assembly_flag   contig  mandatory_hits  accessory_hits
-        opuA    True    3               True        False                      NODE_1  opuAA,opuAB,opuAC   -
-        mrp     False   2               False       True                       -       mrpA,mrpC       -
+        system  present subunit_count   colocalized fragmented_assembly_flag   contig  mandatory_hits  accessory_hits  rescued_hits
+        opuA    True    3               True        False                      NODE_1  opuAA,opuAB,opuAC   -           -
+        opuB    False   2               False       False                      -       opuBB,opuBC     -               opuBC<-opuCC
+        mrp     False   2               False       True                       -       mrpA,mrpC       -               -
 
     present/colocalized/fragmented_assembly_flag: see systems.detect_systems's
     docstring for exactly what each means and how they're distinguished.
+
+    rescued_hits: entries of the form "<family><-<original_label>" for any
+    mandatory subunit that had zero hits under its own family label, but a
+    hit under a documented paralog-confusion sibling (see
+    systems.PARALOG_CONFUSION_CLIQUES) was positionally confirmed adjacent
+    to another real subunit of the same system -- see
+    systems._rescue_missing_mandatory_families. Populated whenever a rescue
+    was confirmed, independent of whether the system as a whole ends up
+    `present` (e.g. one subunit correctly reattributed via rescue doesn't
+    help if a *different* mandatory subunit is genuinely absent elsewhere).
     """
     out_path = Path(str(out_prefix) + ".systems.tsv")
 
     with open(out_path, "w") as fh:
         fh.write(
             "system\tpresent\tsubunit_count\tcolocalized\t"
-            "fragmented_assembly_flag\tcontig\tmandatory_hits\taccessory_hits\n"
+            "fragmented_assembly_flag\tcontig\tmandatory_hits\taccessory_hits\trescued_hits\n"
         )
         for name in sorted(calls):
             call = calls[name]
@@ -186,7 +197,8 @@ def write_system_calls(
                 f"{call.colocalized}\t{call.fragmented_assembly_flag}\t"
                 f"{call.contig or '-'}\t"
                 f"{','.join(call.mandatory_hits) or '-'}\t"
-                f"{','.join(call.accessory_hits) or '-'}\n"
+                f"{','.join(call.accessory_hits) or '-'}\t"
+                f"{','.join(call.rescued_hits) or '-'}\n"
             )
 
     log.info("Wrote system calls → %s", out_path)
