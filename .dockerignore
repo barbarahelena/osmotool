@@ -1,0 +1,14 @@
+# Dev-only artifacts -- the Dockerfile does `COPY . /opt/osmotool/`, so
+# without this file everything below (repo history, local tool settings,
+# ~34MB of test genomes, caches) ends up baked into the published image.
+# Package version is passed in via --build-arg instead of being derived
+# from .git -- see Dockerfile.
+.git
+.github
+.claude
+.pytest_cache
+**/__pycache__
+*.pyc
+*.egg-info
+test_genomes
+tests

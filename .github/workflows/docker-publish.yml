@@ -29,6 +29,8 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.value }}
           tags: |
             barbarahelena/osmotool:${{ steps.version.outputs.value }}
             barbarahelena/osmotool:latest
