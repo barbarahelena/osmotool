@@ -206,6 +206,12 @@ class TestWriteSystemCalls:
                 fragmented_assembly_flag=True, contig=None,
                 mandatory_hits=("mrpA", "mrpC"), accessory_hits=(),
             ),
+            "opuB": SystemCall(
+                system="opuB", present=False, subunit_count=2, colocalized=False,
+                fragmented_assembly_flag=False, contig=None,
+                mandatory_hits=("opuBB", "opuBC"), accessory_hits=(),
+                rescued_hits=("opuBC<-opuCC",),
+            ),
         }
 
     def test_creates_file(self, tmp_path: Path):
@@ -224,12 +230,18 @@ class TestWriteSystemCalls:
         lines = out.read_text().splitlines()
         assert lines[0] == (
             "system\tpresent\tsubunit_count\tcolocalized\t"
-            "fragmented_assembly_flag\tcontig\tmandatory_hits\taccessory_hits"
+            "fragmented_assembly_flag\tcontig\tmandatory_hits\taccessory_hits\trescued_hits"
         )
 
     def test_rows_sorted_and_populated(self, tmp_path: Path):
         prefix = str(tmp_path / "sample")
         out = write_system_calls(prefix, self._calls())
         lines = out.read_text().splitlines()[1:]
-        assert lines[0].startswith("mrp\tFalse\t2\tFalse\tTrue\t-\tmrpA,mrpC\t-")
-        assert lines[1].startswith("opuA\tTrue\t3\tTrue\tFalse\tNODE_1\topuAA,opuAB,opuAC\t-")
+        assert lines[0].startswith("mrp\tFalse\t2\tFalse\tTrue\t-\tmrpA,mrpC\t-\t-")
+        assert lines[1].startswith("opuA\tTrue\t3\tTrue\tFalse\tNODE_1\topuAA,opuAB,opuAC\t-\t-")
+
+    def test_rescued_hits_column(self, tmp_path: Path):
+        prefix = str(tmp_path / "sample")
+        out = write_system_calls(prefix, self._calls())
+        content = out.read_text()
+        assert "opuBC<-opuCC" in content

@@ -61,12 +61,25 @@ Tightened to 3 genes / 2000bp (matching CasFinder's precedent exactly): a
 solid margin above every real operon gap observed across all six species,
 and a solid margin below the false-bridging distances seen. Still not
 exhaustive -- loosen via --systems_config if your own genomes show real
-operons this misses. One consistent negative finding worth flagging back to
-osmo_refdb rather than chasing here: `opuB`'s individual HMM/DIAMOND calls
-never once resolved to a full colocalized operon across any of the six
-species tested (always 1-2 of 3 mandatory subunits, never all three) --
-consistent with the cross-paralog confusion with opuAC/opuCC already noted
-in osmo_refdb's families.yaml (shared PF04069), not a bug in this layer.
+operons this misses.
+
+`opuB` never once resolved to a full colocalized operon across any of the
+six species tested (always 1-2 of 3 mandatory subunits). Checking WHY
+mattered: in 4/5 species, the gene immediately after a confirmed `opuBB`
+is a real ORF mislabeled `opuCC` -- exactly the substrate-binding-domain
+(SBD) cross-paralog confusion families.yaml documents (shared PF04069 with
+opuAC/opuCC/proX) -- while the OTHER blocker, `opuBA`, has no hit at all
+under any family at the position where it should be, in every species
+checked. Those are two different problems: one is a labeling ambiguity
+this layer can resolve with positional evidence (see
+PARALOG_CONFUSION_CLIQUES / _rescue_missing_mandatory_families below); the
+other is a real HMM/DIAMOND recall gap at the refdb level that no amount of
+positional reasoning can invent evidence for. The rescue mechanism fixes
+the former (visible in `rescued_hits`, e.g. "opuBC<-opuCC") but -- honestly
+-- doesn't flip `opuB` to `present` in any of the six species tested,
+because `opuBA`'s gap is the one actually blocking it everywhere. Worth
+flagging back to osmo_refdb as a distinct, separate finding from the SBD
+confusion.
 """
 
 from __future__ import annotations
@@ -109,12 +122,23 @@ class SystemDef:
         Proximity window for colocalization -- BOTH must hold (genes as the
         primary, length-robust unit; bp as a sanity bound so a handful of
         unusually short/long intervening ORFs can't silently blow the
-        window open). Defaults (3 genes / 2000bp) are calibrated against
-        real operons (see this module's docstring for the evidence), not
-        the extension spec's untested 8-gene/8000bp suggestion -- still
-        based on a small sample, so treat as a solid starting point rather
-        than final. See this project's README, and --systems_config for
-        overriding them per system without touching code.
+        window open). Set PER SYSTEM, not a single global default -- most
+        systems here are real single-operon claims calibrated tight (3
+        genes / 2000bp, see this module's docstring for the evidence), but
+        `galE_murB_mazG` is a different KIND of claim (a wider genomic
+        neighborhood, not one transcriptional unit -- see its own def
+        below) and is calibrated on its own, much looser scale. See this
+        project's README, and --systems_config for overriding a system's
+        distances without touching code.
+    require_strand_consistency:
+        Whether _strand_consistent (see detect_systems) is enforced for
+        this system. True (default) for real single-operon claims, where
+        "one contiguous same-strand transcriptional unit" is exactly what's
+        being tested. False for wider claims like `galE_murB_mazG`, where
+        there's no reason to expect one strand across a ~20-40kb genomic
+        region and enforcing it would incorrectly reject the one confirmed
+        real instance (a strand flip sits between mazG and murB/galE in
+        both the source clone and *C. aerofaciens*'s own reference genome).
     fusion_label / fusion_slots:
         Some lineages carry two adjacent mandatory subunits as a single
         fused ORF. When set, a hit whose family label is exactly
@@ -127,6 +151,7 @@ class SystemDef:
     accessory: frozenset[str] = frozenset()
     max_distance_genes: int = 3
     max_distance_bp: int = 2000
+    require_strand_consistency: bool = True
     fusion_label: str | None = None
     fusion_slots: frozenset[str] = frozenset()
 
@@ -170,6 +195,105 @@ DEFAULT_SYSTEMS: dict[str, SystemDef] = {
         name="ktr",
         mandatory=(frozenset({"ktrA"}), frozenset({"ktrB", "ktrD"})),
     ),
+    # Not a transcriptional operon -- a wider genomic-neighborhood claim.
+    # Culligan EP, Sleator RD, Marchesi JR, Hill C. "Functional metagenomics
+    # reveals novel salt tolerance loci from the human gut microbiome."
+    # ISME J. 2012;6(10):1916-1925. doi:10.1038/ismej.2012.38, PMID
+    # 22534607. A transposon-mutagenesis screen of a human gut metagenomic
+    # fosmid library found galE/murB/mazG (individually flagged elsewhere in
+    # this panel as too promiscuous a domain to be specific on their own --
+    # see quantifier.py / families.yaml) together on one ~39kb fosmid clone
+    # (clone "SMG3", closest relative Collinsella aerofaciens; locus tags
+    # COLAER_01955/01957/01981) -- each individually conferred NaCl/KCl
+    # tolerance when expressed in an osmosensitive E. coli strain. galE and
+    # murB sit close (226bp apart in the source clone; confirmed again at 1
+    # gene / 1701bp in C. aerofaciens ATCC 25986's own reference genome,
+    # NCBI GCF_010509075.1), but mazG is real genomic distance away -- 24
+    # locus tags in the source clone, confirmed at 23 genes / 20810bp in
+    # ATCC 25986, WITH a strand flip in between (hence
+    # require_strand_consistency=False here specifically). Distances set
+    # with margin above that confirmed real gap, bounded by the fosmid
+    # insert size itself (~39kb is close to a hard ceiling for "found
+    # together on one clone").
+    "galE_murB_mazG": SystemDef(
+        name="galE_murB_mazG",
+        mandatory=(frozenset({"galE"}), frozenset({"murB"}), frozenset({"mazG"})),
+        max_distance_genes=30,
+        max_distance_bp=35000,
+        require_strand_consistency=False,
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
+# Paralog-confusion rescue
+# ---------------------------------------------------------------------------
+#
+# Some osmo_refdb families are documented as genuinely hard to separate by
+# sequence alone -- close paralogs sharing the same Pfam domain, explicitly
+# flagged in families.yaml as cross-confused rather than just theoretically
+# similar. When one of these families comes up empty for a system, but a
+# hit under one of its documented siblings sits positionally right where
+# that subunit should be (adjacent to the system's OTHER already-confirmed
+# real subunits -- see _rescue_missing_mandatory_families), that's much
+# stronger evidence of what the gene actually is than the ambiguous
+# sequence-based label alone -- but it is still a POSITIONAL/sequence
+# inference, not a functional or evolutionary-identity confirmation
+# (the kind Culligan et al. actually did, by heterologous expression +
+# phenotype assay -- osmotool has no equivalent and can't produce one).
+# Deliberately narrow: only cliques families.yaml explicitly calls out as
+# systematically swapped for each other, not every family sharing a
+# broad/promiscuous domain (e.g. NOT opuAA/opuBA/opuCA or opuAB/opuBB/opuCB
+# -- families.yaml gives them the same negative-query cross-exclusion
+# boilerplate as every other family sharing a generic ABC-transporter fold,
+# but doesn't flag them as an observed swapping problem the way it does for
+# the two cliques below, and real calibration data backs that distinction
+# up: the gene immediately upstream of a real, confirmed opuB operon's
+# opuBB is often a genuine gap -- no hit at all, under any family -- not a
+# mislabeled hit rescue could reattribute).
+#
+# "Documented cross-hit risk between two labels" and "these are
+# interchangeable copies of the same biological thing" are NOT the same
+# claim, and conflating them is a real mistake this module made once
+# already (see CHANGELOG-equivalent discussion in the PR history): proX
+# was originally included alongside opuAC/opuBC/opuCC below because
+# families.yaml's negative-query construction cross-excludes all four from
+# each other's reference sets. But opuAC/opuBC/opuCC really are three
+# structurally-identical, co-occurring PARALOGOUS COPIES of the same
+# recurring operon architecture (confirmed directly: B. subtilis carries
+# real, separate opuA AND opuC operons in the same genome) -- a hit
+# mislabeled opuCC really can be opuBC's own subunit, just landed under a
+# close paralog's label. proX belongs to a different, DELIBERATELY KEPT
+# SEPARATE system (ProU) -- not a duplicate copy of Opu, but a documented
+# non-orthologous, convergently domain-similar system (the same reasoning
+# that got proV/proW deferred entirely rather than folded into
+# opuAA/opuAB). Rescuing opuAC from a real proX hit doesn't identify a
+# mislabeled Opu subunit; it conflates ProU with Opu, and would very
+# plausibly fire the same way on any Proteobacterium carrying a real ProU
+# operon, not just E. coli specifically -- proX is deliberately EXCLUDED
+# from the rescue clique below for exactly this reason (kept only as the
+# distinctly-documented negative-query relationship it actually is,
+# families.yaml's own concern, not a rescue-eligible sibling).
+_CONFUSION_CLIQUES = (
+    # SBD (substrate-binding domain), PF04069 -- proX deliberately
+    # excluded, see the block comment above.
+    frozenset({"opuAC", "opuBC", "opuCC"}),
+    # Pore-forming subunit, PF02386. Treated differently from the SBD case
+    # above: trkH (Proteobacteria naming) and ktrB/ktrD (Firmicutes naming)
+    # are documented in families.yaml as the SAME underlying Trk/Ktr
+    # K+-uptake system under lineage-specific naming conventions, not two
+    # independently-arisen analogous systems the way ProU/Opu are -- but
+    # this is this module's own reading of that documentation, not
+    # something functionally confirmed either. Worth an independent check
+    # by whoever has closer domain knowledge of osmo_refdb's own family
+    # curation before trusting it as firmly as the SBD case's exclusion.
+    frozenset({"trkH", "ktrB", "ktrD"}),
+)
+
+PARALOG_CONFUSION_CLIQUES: dict[str, frozenset[str]] = {
+    fam: frozenset(clique - {fam})
+    for clique in _CONFUSION_CLIQUES
+    for fam in clique
 }
 
 
@@ -204,6 +328,7 @@ def load_systems_config(
                 accessory=sys_def.accessory,
                 max_distance_genes=genes,
                 max_distance_bp=bp,
+                require_strand_consistency=sys_def.require_strand_consistency,
                 fusion_label=sys_def.fusion_label,
                 fusion_slots=sys_def.fusion_slots,
             )
@@ -231,6 +356,7 @@ class SystemCall:
     contig: str | None
     mandatory_hits: tuple[str, ...]
     accessory_hits: tuple[str, ...]
+    rescued_hits: tuple[str, ...] = ()
 
 
 @dataclass
@@ -268,6 +394,107 @@ def _collect_hits(
             hits[family].append(_Hit(family, orf_id, coord))
 
     return dict(hits)
+
+
+def _collect_rescue_hits(
+    best_hits: dict[str, dict], orf_coords: dict[str, OrfCoord], sys_def: SystemDef
+) -> dict[str, list[_Hit]]:
+    """
+    {mandatory_family: [_Hit, ...]} -- rescue candidates for each of
+    *sys_def*'s mandatory families that has documented paralog-confusion
+    siblings (PARALOG_CONFUSION_CLIQUES). Each _Hit keeps its own TRUE
+    family label (e.g. "opuCC"), not the family it might rescue -- these
+    are only accepted once independently confirmed positionally adjacent to
+    a real subunit of the SAME system (see
+    _rescue_missing_mandatory_families), never on label alone.
+    """
+    mandatory_families = frozenset(fam for slot in sys_def.mandatory for fam in slot)
+    rescuable = {
+        fam: PARALOG_CONFUSION_CLIQUES[fam]
+        for fam in mandatory_families if fam in PARALOG_CONFUSION_CLIQUES
+    }
+    if not rescuable:
+        return {}
+
+    candidates: dict[str, list[_Hit]] = defaultdict(list)
+    for orf_id, row in best_hits.items():
+        coord = orf_coords.get(orf_id)
+        if coord is None:
+            continue
+        family = gene_family_from_header(row["sseqid"])
+        for target_fam, siblings in rescuable.items():
+            if family in siblings:
+                candidates[target_fam].append(_Hit(family, orf_id, coord))
+
+    return dict(candidates)
+
+
+def _rescue_missing_mandatory_families(
+    hits_by_family: dict[str, list[_Hit]],
+    rescue_candidates: dict[str, list[_Hit]],
+    sys_def: SystemDef,
+    strand_index: dict[str, dict[int, int]],
+) -> tuple[dict[str, list[_Hit]], dict[str, str]]:
+    """
+    For each mandatory family with zero real hits, accept the first rescue
+    candidate (see _collect_rescue_hits) confirmed positionally adjacent
+    (same contig, within the proximity window AND strand-consistent -- see
+    _within_window / _strand_consistent) to a REAL hit of some OTHER
+    mandatory family of this same system. This is the only thing that makes
+    a rescue legitimate: an isolated, far-away hit under a confusable
+    sibling label has no more evidence of being this family than of being
+    the label it already carries -- only adjacency to an already-confirmed
+    subunit of the SAME operon does.
+
+    A confirmed rescue is merged into the returned hits_by_family under its
+    TARGET family (e.g. a mislabeled "opuCC" hit satisfying opuBC's slot is
+    stored as an opuBC-family _Hit, not opuCC) so every downstream step
+    (subunit_count, the colocalization search, mandatory_hits reporting)
+    treats it exactly like a real hit. Returns (augmented_hits_by_family,
+    {target_family: original_sibling_label}) -- the second dict is only
+    for SystemCall.rescued_hits' transparency, not used for detection logic.
+
+    Operates per SLOT, not per individual family: a multi-member OR-slot
+    (e.g. ktr's {ktrB, ktrD}) is skipped entirely once ANY of its own
+    members has a real hit, exactly like _slot_satisfied_on_contig's OR
+    semantics -- this matters because ktrB/ktrD are simultaneously (a)
+    interchangeable alternatives within ktr's own slot AND (b) each other's
+    documented confusion siblings for the SEPARATE trk/ktr cross-system
+    clique. Rescuing "ktrB" from a real "ktrD" hit whenever ktrD already
+    satisfies the slot directly would be redundant at best and, worse,
+    creates two candidate labels for the same physical ORF competing in the
+    colocalization search below -- the OR-slot mechanism already covers
+    that case with no rescue needed.
+    """
+    augmented = {fam: list(hs) for fam, hs in hits_by_family.items()}
+    rescued_from: dict[str, str] = {}
+
+    all_mandatory_members = [fam for slot in sys_def.mandatory for fam in slot]
+    anchors = [h for fam in all_mandatory_members if fam in hits_by_family for h in hits_by_family[fam]]
+
+    for slot in sys_def.mandatory:
+        if any(fam in hits_by_family for fam in slot):
+            continue  # slot already satisfied directly -- no rescue needed
+
+        target = sorted(slot)[0]  # canonical attribution when this slot needs rescuing
+        for fam in sorted(slot):
+            for candidate in rescue_candidates.get(fam, ()):
+                if candidate.family in slot:
+                    continue  # a same-slot alternative isn't a real rescue -- see docstring
+                confirmed = any(
+                    candidate.coord.contig == anchor.coord.contig
+                    and _within_window(candidate, anchor, sys_def)
+                    and _strand_consistent(candidate, anchor, strand_index)
+                    for anchor in anchors
+                )
+                if confirmed:
+                    augmented.setdefault(target, []).append(_Hit(target, candidate.orf_id, candidate.coord))
+                    rescued_from[target] = candidate.family
+                    break
+            if target in rescued_from:
+                break
+
+    return augmented, rescued_from
 
 
 def _slot_satisfied_on_contig(
@@ -363,7 +590,10 @@ def _contig_is_colocalized(
         ordered = sorted(combo, key=lambda h: h.coord.gene_index)
         if all(
             _within_window(ordered[i], ordered[i + 1], sys_def)
-            and _strand_consistent(ordered[i], ordered[i + 1], strand_index)
+            and (
+                not sys_def.require_strand_consistency
+                or _strand_consistent(ordered[i], ordered[i + 1], strand_index)
+            )
             for i in range(len(ordered) - 1)
         ):
             return True, list(combo)
@@ -398,6 +628,14 @@ def detect_systems(
     for name, sys_def in systems.items():
         hits_by_family = _collect_hits(best_hits, orf_coords, sys_def)
 
+        rescue_candidates = _collect_rescue_hits(best_hits, orf_coords, sys_def)
+        rescued_from: dict[str, str] = {}
+        if rescue_candidates:
+            hits_by_family, rescued_from = _rescue_missing_mandatory_families(
+                hits_by_family, rescue_candidates, sys_def, strand_index
+            )
+        rescued_hits = tuple(f"{fam}<-{orig}" for fam, orig in sorted(rescued_from.items()))
+
         mandatory_families_found = sorted(
             fam for slot in sys_def.mandatory for fam in slot if fam in hits_by_family
         )
@@ -408,7 +646,7 @@ def detect_systems(
             calls[name] = SystemCall(
                 system=name, present=False, subunit_count=0, colocalized=False,
                 fragmented_assembly_flag=False, contig=None,
-                mandatory_hits=(), accessory_hits=(),
+                mandatory_hits=(), accessory_hits=(), rescued_hits=(),
             )
             continue
 
@@ -431,6 +669,7 @@ def detect_systems(
                 fragmented_assembly_flag=False, contig=colocalized_contig,
                 mandatory_hits=tuple(sorted({h.family for h in chosen_hits})),
                 accessory_hits=tuple(accessory_families_found),
+                rescued_hits=rescued_hits,
             )
             continue
 
@@ -451,6 +690,7 @@ def detect_systems(
             fragmented_assembly_flag=fragmented, contig=None,
             mandatory_hits=tuple(mandatory_families_found),
             accessory_hits=tuple(accessory_families_found),
+            rescued_hits=rescued_hits,
         )
 
     return calls

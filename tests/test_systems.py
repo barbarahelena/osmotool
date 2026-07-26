@@ -168,6 +168,105 @@ class TestKtrOrSlot:
         assert "ktrB" not in call.mandatory_hits
 
 
+class TestParalogRescue:
+    """Positional rescue for osmo_refdb's documented paralog-confusion
+    cliques (systems.PARALOG_CONFUSION_CLIQUES) -- see
+    systems._rescue_missing_mandatory_families's docstring. Mirrors the real
+    finding on B. subtilis/S. aureus/etc.: opuBC gets systematically
+    mislabeled opuCC (shared PF04069 substrate-binding domain), but only
+    counts as opuBC when positionally confirmed adjacent to a real opuB
+    subunit -- never on label alone."""
+
+    def test_rescues_opuBC_via_mislabeled_opuCC(self):
+        best_hits = {
+            "NODE_1_1": _hit("opuBA", "NODE_1_1"),
+            "NODE_1_2": _hit("opuBB", "NODE_1_2"),
+            "NODE_1_3": _hit("opuCC", "NODE_1_3"),  # really opuBC, mislabeled
+        }
+        orf_coords = {
+            f"NODE_1_{i}": _coord("NODE_1", i, *_gene("NODE_1", i)) for i in (1, 2, 3)
+        }
+        calls = detect_systems(best_hits, orf_coords)
+        call = calls["opuB"]
+        assert call.present is True
+        assert call.colocalized is True
+        assert "opuBC" in call.mandatory_hits
+        assert call.rescued_hits == ("opuBC<-opuCC",)
+
+    def test_rescue_alone_does_not_flip_present_when_another_slot_is_genuinely_missing(self):
+        # opuBA has NO hit anywhere (a real recall gap, not a labeling
+        # issue) -- rescuing opuBC still can't make the system present.
+        best_hits = {
+            "NODE_1_1": _hit("opuBB", "NODE_1_1"),
+            "NODE_1_2": _hit("opuCC", "NODE_1_2"),  # really opuBC, mislabeled
+        }
+        orf_coords = {
+            f"NODE_1_{i}": _coord("NODE_1", i, *_gene("NODE_1", i)) for i in (1, 2)
+        }
+        calls = detect_systems(best_hits, orf_coords)
+        call = calls["opuB"]
+        assert call.present is False
+        # but the rescue is still surfaced, precisely the useful signal
+        # even though the system overall isn't present
+        assert call.rescued_hits == ("opuBC<-opuCC",)
+        assert "opuBC" in call.mandatory_hits
+
+    def test_rescue_requires_positional_confirmation_not_label_alone(self):
+        # an "opuCC"-labeled hit far from any real opuB subunit must NOT
+        # be rescued -- there's no anchor to justify the reattribution.
+        best_hits = {
+            "NODE_1_1": _hit("opuBA", "NODE_1_1"),
+            "NODE_1_2": _hit("opuBB", "NODE_1_2"),
+            "NODE_1_500": _hit("opuCC", "NODE_1_500"),  # far away, unrelated
+        }
+        orf_coords = {
+            "NODE_1_1": _coord("NODE_1", 1, *_gene("NODE_1", 1)),
+            "NODE_1_2": _coord("NODE_1", 2, *_gene("NODE_1", 2)),
+            "NODE_1_500": _coord("NODE_1", 500, *_gene("NODE_1", 500)),
+        }
+        calls = detect_systems(best_hits, orf_coords)
+        call = calls["opuB"]
+        assert call.present is False
+        assert call.rescued_hits == ()
+        assert "opuBC" not in call.mandatory_hits
+
+    def test_trk_rescues_trkH_via_mislabeled_ktrB(self):
+        best_hits = {
+            "NODE_1_1": _hit("trkA", "NODE_1_1"),
+            "NODE_1_2": _hit("ktrB", "NODE_1_2"),  # really trkH, mislabeled
+        }
+        orf_coords = {
+            "NODE_1_1": _coord("NODE_1", 1, *_gene("NODE_1", 1)),
+            "NODE_1_2": _coord("NODE_1", 2, *_gene("NODE_1", 2)),
+        }
+        calls = detect_systems(best_hits, orf_coords)
+        call = calls["trk"]
+        assert call.present is True
+        assert call.rescued_hits == ("trkH<-ktrB",)
+
+    def test_proX_never_rescues_opuAC(self):
+        # Regression guard: proX is a documented, deliberately SEPARATE,
+        # non-orthologous system (ProU), not a duplicate copy of Opu the
+        # way opuAC/opuBC/opuCC genuinely are -- rescuing opuAC from a real
+        # proX hit would conflate two distinct systems (e.g. E. coli's own
+        # real ProVWX operon getting misread as evidence of Firmicutes
+        # OpuA), not correct a labeling ambiguity. proX must never appear
+        # in PARALOG_CONFUSION_CLIQUES as a rescue source for opu*C.
+        best_hits = {
+            "NODE_1_1": _hit("opuAA", "NODE_1_1"),
+            "NODE_1_2": _hit("opuAB", "NODE_1_2"),
+            "NODE_1_3": _hit("proX", "NODE_1_3"),  # E. coli's real ProU subunit
+        }
+        orf_coords = {
+            f"NODE_1_{i}": _coord("NODE_1", i, *_gene("NODE_1", i)) for i in (1, 2, 3)
+        }
+        calls = detect_systems(best_hits, orf_coords)
+        call = calls["opuA"]
+        assert call.present is False
+        assert call.rescued_hits == ()
+        assert "opuAC" not in call.mandatory_hits
+
+
 class TestStrandConsistency:
     """A real operon is one contiguous same-strand transcriptional unit --
     complementary to (not a substitute for) the distance window. See
@@ -248,3 +347,73 @@ class TestLoadSystemsConfig:
         config_path.write_text("system\tmax_distance_genes\tmax_distance_bp\nnotasystem\t3\t8000\n")
         systems = load_systems_config(config_path)
         assert set(systems) == set(DEFAULT_SYSTEMS)
+
+    def test_override_preserves_require_strand_consistency(self, tmp_path: Path):
+        # regression test: overriding distances must not silently reset
+        # require_strand_consistency back to the dataclass default (True)
+        config_path = tmp_path / "systems_config.tsv"
+        config_path.write_text(
+            "system\tmax_distance_genes\tmax_distance_bp\ngalE_murB_mazG\t40\t40000\n"
+        )
+        systems = load_systems_config(config_path)
+        assert systems["galE_murB_mazG"].require_strand_consistency is False
+        assert DEFAULT_SYSTEMS["galE_murB_mazG"].require_strand_consistency is False
+        # a strict system's default (True) must also survive being untouched
+        assert systems["ots"].require_strand_consistency is True
+
+
+class TestGaleMurBMazG:
+    """galE_murB_mazG (Culligan et al. 2012, ISME J -- see systems.py's
+    DEFAULT_SYSTEMS entry): a wider genomic-neighborhood claim, not a
+    transcriptional operon -- much looser distance window, and strand
+    consistency deliberately NOT enforced (a real strand flip sits inside
+    the one confirmed positive instance, both in the source fosmid clone
+    and in C. aerofaciens ATCC 25986's own reference genome)."""
+
+    def test_present_despite_wide_gap_and_strand_flip(self):
+        # mirrors the real C. aerofaciens layout: galE/murB tight and
+        # same-strand, mazG ~23 genes away on the OPPOSITE strand
+        best_hits = {
+            "NODE_1_1": _hit("mazG", "NODE_1_1"),
+            "NODE_1_25": _hit("murB", "NODE_1_25"),
+            "NODE_1_26": _hit("galE", "NODE_1_26"),
+        }
+        orf_coords = {
+            "NODE_1_1": _coord("NODE_1", 1, *_gene("NODE_1", 1), strand=-1),
+            "NODE_1_25": _coord("NODE_1", 25, *_gene("NODE_1", 25), strand=1),
+            "NODE_1_26": _coord("NODE_1", 26, *_gene("NODE_1", 26), strand=1),
+        }
+        calls = detect_systems(best_hits, orf_coords)
+        call = calls["galE_murB_mazG"]
+        assert call.present is True
+        assert call.colocalized is True
+
+    def test_absent_when_beyond_the_wide_window(self):
+        default = DEFAULT_SYSTEMS["galE_murB_mazG"]
+        far_index = default.max_distance_genes + 5
+        best_hits = {
+            "NODE_1_1": _hit("galE", "NODE_1_1"),
+            "NODE_1_2": _hit("murB", "NODE_1_2"),
+            f"NODE_1_{far_index}": _hit("mazG", f"NODE_1_{far_index}"),
+        }
+        orf_coords = {
+            "NODE_1_1": _coord("NODE_1", 1, *_gene("NODE_1", 1)),
+            "NODE_1_2": _coord("NODE_1", 2, *_gene("NODE_1", 2)),
+            f"NODE_1_{far_index}": _coord("NODE_1", far_index, *_gene("NODE_1", far_index)),
+        }
+        calls = detect_systems(best_hits, orf_coords)
+        assert calls["galE_murB_mazG"].present is False
+
+    def test_strict_systems_still_reject_strand_flips(self):
+        # regression guard: require_strand_consistency=False on this ONE
+        # system must not weaken the strict systems (e.g. ots)
+        best_hits = {
+            "NODE_1_1": _hit("otsA", "NODE_1_1"),
+            "NODE_1_2": _hit("otsB", "NODE_1_2"),
+        }
+        orf_coords = {
+            "NODE_1_1": _coord("NODE_1", 1, *_gene("NODE_1", 1), strand=1),
+            "NODE_1_2": _coord("NODE_1", 2, *_gene("NODE_1", 2), strand=-1),
+        }
+        calls = detect_systems(best_hits, orf_coords)
+        assert calls["ots"].present is False

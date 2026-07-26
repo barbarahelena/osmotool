@@ -53,32 +53,41 @@ and `:X.Y.Z` are both updated on each release.
 
 `osmotool` takes a single `DATABASE` argument: the path to an unpacked
 [`osmo_refdb`](https://github.com/barbarahelena/osmo_refdb) release
-directory (e.g. `v5/`) — download and unpack it with:
+directory (e.g. `v7/`) — download and unpack it with:
 
 ```bash
-osmotool download-db --release v5 --location /path/to/refdb
-# -> downloads + unpacks into /path/to/refdb/v5/
-osmotool profile /path/to/refdb/v5 ...
+osmotool download-db --release v7 --location /path/to/refdb
+# -> downloads + unpacks into /path/to/refdb/v7/
+osmotool profile /path/to/refdb/v7 ...
 ```
 
-`--release` defaults to `latest` (currently `v5`); `--location` defaults to
+`--release` defaults to `latest` (currently `v7`); `--location` defaults to
 the current directory. Already-extracted releases are left alone unless
 `--force` is passed, and the downloaded archive is deleted after a
 successful extraction unless `--keep_archive` is passed. The download is
 checksum-verified against Zenodo's reported md5 before extraction.
 
-**v5** — DOI: [10.5281/zenodo.21420253](https://doi.org/10.5281/zenodo.21420253)
+**v7** (latest) — DOI: [10.5281/zenodo.21600046](https://doi.org/10.5281/zenodo.21600046).
+Adds the Firmicutes compatible-solute transporters (opuA/opuB/opuC), the
+Mrp/Mnh Na⁺/H⁺ antiporter complex, gut-validated subsystems (bet/gsh/cspA),
+and Kdp backup/disambiguation genes (trk/ktr) on top of v5's original panel
+— see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only)
+above for what `annotate` mode does with the new multi-subunit ones.
+
+**v5** — DOI: [10.5281/zenodo.21420253](https://doi.org/10.5281/zenodo.21420253).
+Still downloadable (`--release v5`) for reproducing results generated
+against the original panel.
 
 Or download manually:
 
 ```bash
-curl -LO https://zenodo.org/records/21420253/files/v5.tar.gz
-tar -xzf v5.tar.gz    # produces a v5/ directory
-osmotool profile v5 ...
+curl -LO https://zenodo.org/records/21600046/files/v7.tar.gz
+tar -xzf v7.tar.gz    # produces a v7/ directory
+osmotool profile v7 ...
 ```
 
-Cite this DOI (alongside `osmotool` itself) in any publication using these
-results.
+Cite the DOI of whichever release you used (alongside `osmotool` itself) in
+any publication using these results.
 
 Inside that directory, osmotool finds everything it needs by fixed
 filename — no need to point at each file separately:
@@ -103,7 +112,7 @@ which also needs `--cascade` on the command line since it pulls in
 
 ```bash
 osmotool profile \
-  /path/to/osmo_refdb/releases/v5 \
+  /path/to/osmo_refdb/releases/v7 \
   -1 sample_R1.fastq.gz \
   -2 sample_R2.fastq.gz \
   --out_prefix results/sample \
@@ -117,7 +126,7 @@ Single-end reads:
 
 ```bash
 osmotool profile \
-  /path/to/osmo_refdb/releases/v5 \
+  /path/to/osmo_refdb/releases/v7 \
   --singles sample.fastq.gz \
   --out_prefix results/sample \
   --threads 8
@@ -130,7 +139,7 @@ hidden from the report automatically whenever
 
 ```bash
 osmotool profile \
-  /path/to/osmo_refdb/releases/v5 \
+  /path/to/osmo_refdb/releases/v7 \
   -1 sample_R1.fastq.gz -2 sample_R2.fastq.gz \
   --out_prefix results/sample \
   --cascade \
@@ -142,7 +151,7 @@ osmotool profile \
 ```bash
 # HMM (default method) with Prodigal ORF prediction:
 osmotool annotate \
-  /path/to/osmo_refdb/releases/v5 \
+  /path/to/osmo_refdb/releases/v7 \
   assembly.fasta \
   --out_prefix results/assembly \
   --threads 8
@@ -152,7 +161,7 @@ osmotool annotate \
 # applied automatically whenever osmo_refdb.diamond_cutoffs.tsv /
 # osmo_refdb.annotate_excluded_families.txt are present in DATABASE:
 osmotool annotate \
-  /path/to/osmo_refdb/releases/v5 \
+  /path/to/osmo_refdb/releases/v7 \
   assembly.fasta \
   --method diamond \
   --out_prefix results/assembly \
@@ -160,7 +169,7 @@ osmotool annotate \
 
 # With pre-called proteins (skip Prodigal):
 osmotool annotate \
-  /path/to/osmo_refdb/releases/v5 \
+  /path/to/osmo_refdb/releases/v7 \
   assembly.fasta \
   --proteins assembly_proteins.faa \
   --out_prefix results/assembly \
@@ -239,6 +248,27 @@ on top of the existing per-gene calls to answer that, written to
 | `ots` | otsA, otsB | — | — |
 | `trk` | trkA, trkH | — | — |
 | `ktr` | ktrA, (ktrB *or* ktrD) | — | — |
+| `galE_murB_mazG` | galE, murB, mazG | — | — |
+
+`galE_murB_mazG` is a different KIND of system from the rest of the table — not a
+transcriptional operon, but a wider genomic-neighborhood finding: [Culligan et
+al. 2012](https://doi.org/10.1038/ismej.2012.38) (*ISME J* 6(10):1916-1925,
+PMID 22534607) found these three genes — each individually too broad a domain
+to be specific on its own (see `annotate_only`/`profile_excluded_families`
+scoping elsewhere in this README) — together on a single ~39kb metagenomic
+fosmid clone from a *Collinsella*-related organism via transposon mutagenesis,
+each independently conferring NaCl/KCl tolerance when expressed in an
+osmosensitive *E. coli* strain. Confirmed directly against *C. aerofaciens*
+ATCC 25986's own reference genome (NCBI GCF_010509075.1): `galE`/`murB` sit 1
+gene / 1701bp apart, but `mazG` is a real 23 genes / 20810bp away — with a
+strand flip in between. That's why this system alone uses a much wider window
+(30 genes / 35000bp, bounded by the fosmid's own insert size) and disables the
+strand-consistency check other systems use (`require_strand_consistency=False`
+in `systems.py` — a real, confirmed strand flip sits inside the one validated
+positive case, and there's no reason to expect one strand across a
+~20-40kb neighborhood the way there is for an actual operon). Checked against
+all seven other validation genomes: fires only on *C. aerofaciens* itself, not
+indiscriminately on every genome carrying all three genes somewhere.
 
 For each system, `systems.tsv` reports:
 
@@ -250,6 +280,7 @@ For each system, `systems.tsv` reports:
 | `fragmented_assembly_flag` | Subunits were found, but on ≥2 different contigs, so colocalization genuinely can't be evaluated — distinct from subunits simply being too far apart on the *same* contig, which is a real "not colocalized" call, not a fragmentation call |
 | `contig` | The contig the system was called present on (`-` otherwise) |
 | `mandatory_hits` / `accessory_hits` | Which families were actually found |
+| `rescued_hits` | `<family><-original_label>` entries for any subunit reattributed via paralog-confusion rescue (see below) instead of found under its own label |
 
 **Proximity window**: a system counts as colocalized when the mandatory subunits,
 sorted by genomic position, form one contiguous run — every *consecutive* pair
@@ -308,14 +339,55 @@ scheme applied to a genuine multi-domain fusion protein) for the lineages that
 actually carry the fusion — most don't (e.g. *Bacillus* itself always keeps
 `mrpA`/`mrpB` split).
 
+**Paralog-confusion rescue**: some osmo_refdb families are close enough paralogs
+of each other, sharing the same Pfam domain, that families.yaml documents them
+as systematically swapped for each other by DIAMOND/HMM — not just theoretically
+similar. When a mandatory subunit has zero hits under its own family label, but
+a hit under one of its documented siblings is positionally confirmed adjacent to
+another real, already-found subunit of the SAME system (same proximity window +
+strand-consistency check as everything else — never on sequence label alone),
+it's reattributed to the correct slot and reported in a new `rescued_hits`
+column (e.g. `opuBC<-opuCC`). This directly targets a real finding from the
+six-species sweep: in 4/5 Firmicutes tested, the gene right after a confirmed
+`opuBB` is a real ORF mislabeled `opuCC` — exactly the substrate-binding-domain
+(SBD, PF04069) confusion — and rescuing it is now visible in the output even
+when the system overall still isn't `present` for an unrelated reason (see
+below).
+
+**Important scope limit, found the hard way**: "documented cross-hit risk
+between two labels" and "these are interchangeable copies of the same
+biological thing" are not the same claim. `opuAC`/`opuBC`/`opuCC` really are
+three structurally-identical, co-occurring *paralogous copies* of the same
+recurring operon architecture (confirmed directly — *B. subtilis* carries real,
+separate `opuA` and `opuC` operons in the same genome), so rescuing among them
+is legitimate. `proX` was initially included in the same rescue clique, since
+families.yaml's negative-query design cross-excludes it from the same reference
+sets — but `proX` belongs to a different, *deliberately kept separate* system
+(ProU), not a duplicate copy of Opu (the same reasoning that got `proV`/`proW`
+deferred entirely rather than folded into `opuAA`/`opuAB`). That distinction
+was missed initially: rescuing `opuAC` from a real `proX` hit fired on *E.
+coli* and was first reported here as a validation win. It wasn't — E. coli's
+real ProVWX operon getting reattributed to `opuAC` is a false positive, not
+confirmation, and the same mechanism would very plausibly fire the same way on
+any Proteobacterium carrying a real ProU operon. `proX` is now explicitly
+excluded from the rescue clique (`systems.PARALOG_CONFUSION_CLIQUES`), with a
+regression test guarding against reintroducing it. The one other rescue clique,
+pore-forming `trkH`/`ktrB`/`ktrD` (PF02386), is treated differently — documented
+as lineage-specific naming for the *same* underlying Trk/Ktr system rather than
+two independently-arisen analogous ones — but that's this module's own reading
+of the documentation, not functionally confirmed either, and worth an
+independent check by whoever has closer domain knowledge of osmo_refdb's own
+family curation.
+
 **Known refdb-level limitation (`opuB`)**: across all six validation species,
-`opuB` never once resolved to a full colocalized operon — always 1-2 of its 3
-mandatory subunits, never all three, and a different subset per species/method.
-This traces to a real precision issue in osmo_refdb's individual `opuBA`/
-`opuBB`/`opuBC` HMM/DIAMOND models (documented cross-paralog confusion with
-`opuAC`/`opuCC` via shared Pfam PF04069, not something this detection layer can
-fix — it's correctly reflecting noisy upstream per-gene calls rather than
-manufacturing false confidence).
+`opuB` never once resolved to a full colocalized operon, even with the rescue
+above — always 1-2 of its 3 mandatory subunits. The rescue fixes the `opuBC`
+side (a real labeling ambiguity), but the other blocker, `opuBA`, is a different
+problem: in every species checked, there's no hit *at all*, under any family, at
+the position where it should be. That's a genuine HMM/DIAMOND recall gap in
+osmo_refdb's `opuBA` model, not a mislabeling — no positional reasoning can
+invent evidence that isn't there. Worth flagging back to osmo_refdb as a
+separate, distinct finding from the SBD confusion.
 
 Relevant flags (see [Parameters](#parameters)): `--skip_systems` to disable this
 layer entirely, `--systems_config` to override the proximity window per system.
@@ -385,7 +457,7 @@ module load anaconda3
 conda activate osmotool
 
 osmotool profile \
-    /path/to/osmo_refdb/releases/v5 \
+    /path/to/osmo_refdb/releases/v7 \
     -1 ${SAMPLE}_R1.fastq.gz \
     -2 ${SAMPLE}_R2.fastq.gz \
     --out_prefix results/${SAMPLE} \
