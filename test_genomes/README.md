@@ -10,22 +10,26 @@ RefSeq assemblies, downloaded via `https://ftp.ncbi.nlm.nih.gov/genomes/all/...`
 
 | File | Organism | Assembly | Sequence(s) | Size |
 |---|---|---|---|---|
-| `ecoli_k12.fna` | *Escherichia coli* str. K-12 substr. MG1655 | — | NC_000913.3 | 4.5 MB |
+| `ecoli_k12.fna` | *Escherichia coli* str. K-12 substr. MG1655 | GCF_000005845.2 | NC_000913.3 | 4.5 MB |
 | `bsubtilis_168.fna` | *Bacillus subtilis* subsp. subtilis str. 168 | GCF_000009045.1 (ASM904v1) | NC_000964.3 | 4.1 MB |
 | `saureus.fna` | *Staphylococcus aureus* subsp. aureus NCTC 8325 | GCF_000013425.1 (ASM1342v1) | NC_007795.1 | 2.7 MB |
 | `lmonocytogenes.fna` | *Listeria monocytogenes* EGD-e | GCF_000196035.1 (ASM19603v1) | NC_003210.1 | 2.8 MB |
 | `efaecalis.fna` | *Enterococcus faecalis* V583 | GCF_000007785.1 (ASM778v1) | NC_004668.1 + 3 more (plasmids) | 3.2 MB |
 | `helongata.fna` | *Halomonas elongata* DSM 2581 | GCF_000196875.2 (ASM19687v2) | NC_014532.2 | 3.9 MB |
 | `collinsella.fna` | *Collinsella aerofaciens* ATCC 25986 (strain JCM 10188) | GCF_010509075.1 (ASM1050907v1) | NZ_CP048433.1 | 2.4 MB |
-| `hvolcanii.fna` | *Haloferax volcanii* DS2 (archaeon) | — | NC_013967.1 + 4 plasmids | 3.9 MB |
-| `rbaltica.fna` | *Rhodopirellula baltica* SH 1 (Planctomycetota) | — | NC_005027.1 | 6.9 MB |
+| `hvolcanii.fna` | *Haloferax volcanii* DS2 (archaeon) | GCF_000025685.1 | NC_013967.1 + 4 plasmids | 3.9 MB |
+| `rbaltica.fna` | *Rhodopirellula baltica* SH 1 (Planctomycetota) | — (NC_005027, no versioned GCF recorded) | NC_005027.1 | 6.9 MB |
 
 **Total: ~34 MB.** `ecoli_k12`/`hvolcanii`/`rbaltica` predate this validation
-work; their exact NCBI assembly accessions weren't recorded at the time, only
-the RefSeq sequence accessions shown above (`grep "^>"` against each file).
-The other six were pulled specifically for this validation, each chosen as
-the standing NCBI RefSeq "reference genome" (or "Complete Genome" where no
-"reference genome" flag exists) for its organism.
+work — they're osmo_refdb's own real-genome validation set, documented in
+`pipeline/real_genome_validation/README.md` in that repo. H. volcanii was
+specifically chosen there for "zero training-set overlap" (an archaeon
+sharing no lineage with anything osmo_refdb's HMMs/DIAMOND references were
+built from) — the same role it plays here: a genuinely independent negative
+control, not just "some other domain of life." The other six were pulled
+specifically for this validation, each chosen as the standing NCBI RefSeq
+"reference genome" (or "Complete Genome" where no "reference genome" flag
+exists) for its organism.
 
 ## Why these particular species
 
@@ -43,9 +47,13 @@ the standing NCBI RefSeq "reference genome" (or "Complete Genome" where no
   systems (`mrp`/`opuA`/`opuB`/`opuC`/`ect`), and the real positive for
   `ots` (otsBA) and the real negative-but-present-elsewhere case for `trk`
   (trkA/trkH genuinely both present, genuinely not colocalized).
-- **H. volcanii, R. baltica** — cross-domain/cross-phylum controls
-  (archaeon; Planctomycetota) predating this specific validation round, kept
-  for broader sanity-checking beyond Firmicutes/Proteobacteria.
+- **H. volcanii** — an archaeon with, per osmo_refdb's own real-genome
+  validation notes, zero training-set overlap with anything its HMMs/DIAMOND
+  references were built from: a genuinely independent negative control, not
+  just "a different domain of life." Still produced a plausible `mrp` true
+  positive here (Mrp/Mnh-type antiporters aren't Firmicutes-exclusive).
+- **R. baltica** — Planctomycetota cross-phylum control, also from
+  osmo_refdb's own validation set.
 
 ## What was found
 
@@ -73,8 +81,7 @@ these genomes) — this is a pointer, not a duplicate:
 
 ## Reproducing
 
-Each genome (except the three pre-existing ones, whose original accession
-wasn't recorded) can be re-fetched directly, e.g.:
+Each genome can be re-fetched directly from its accession, e.g.:
 
 ```bash
 curl -sL "https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/009/045/GCF_000009045.1_ASM904v1/GCF_000009045.1_ASM904v1_genomic.fna.gz" \
