@@ -10,6 +10,7 @@ import pytest
 
 from osmotool.output import (
     write_gene_counts,
+    write_gene_coordinates,
     write_aln_stats,
     build_aln_stats,
     write_system_calls,
@@ -98,6 +99,49 @@ class TestWriteGeneCounts:
         data = {parts[0]: float(parts[1]) for parts in (l.split("\t") for l in lines[1:])}
         for fam in sample_counts:
             assert data[fam] == pytest.approx(sample_counts[fam])
+
+
+# ---------------------------------------------------------------------------
+# write_gene_coordinates
+# ---------------------------------------------------------------------------
+
+class TestWriteGeneCoordinates:
+    def _rows(self):
+        return [
+            {"gene": "ectB", "protein_id": "NODE_1_8", "contig": "NODE_1",
+             "start": 2410, "end": 3200, "strand": 1, "gene_index": 8},
+            {"gene": "ectA", "protein_id": "NODE_1_7", "contig": "NODE_1",
+             "start": 1801, "end": 2400, "strand": 1, "gene_index": 7},
+        ]
+
+    def test_creates_file(self, tmp_path: Path):
+        prefix = str(tmp_path / "sample")
+        out = write_gene_coordinates(prefix, self._rows())
+        assert out.exists()
+
+    def test_output_filename(self, tmp_path: Path):
+        prefix = str(tmp_path / "mysample")
+        out = write_gene_coordinates(prefix, self._rows())
+        assert out.name == "mysample.gene_coordinates.tsv"
+
+    def test_header_row(self, tmp_path: Path):
+        prefix = str(tmp_path / "sample")
+        out = write_gene_coordinates(prefix, self._rows())
+        lines = out.read_text().splitlines()
+        assert lines[0] == "gene\tprotein_id\tcontig\tstart\tend\tstrand\tgene_index"
+
+    def test_rows_sorted_by_gene_then_start(self, tmp_path: Path):
+        prefix = str(tmp_path / "sample")
+        out = write_gene_coordinates(prefix, self._rows())
+        lines = out.read_text().splitlines()[1:]
+        assert lines[0].startswith("ectA\tNODE_1_7\tNODE_1\t1801\t2400\t1\t7")
+        assert lines[1].startswith("ectB\tNODE_1_8\tNODE_1\t2410\t3200\t1\t8")
+
+    def test_empty_rows(self, tmp_path: Path):
+        prefix = str(tmp_path / "sample")
+        out = write_gene_coordinates(prefix, [])
+        lines = out.read_text().splitlines()
+        assert lines == ["gene\tprotein_id\tcontig\tstart\tend\tstrand\tgene_index"]
 
 
 # ---------------------------------------------------------------------------

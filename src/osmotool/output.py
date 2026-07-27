@@ -69,6 +69,45 @@ def write_gene_counts(
 
 
 # ---------------------------------------------------------------------------
+# gene_coordinates.tsv (annotate mode only -- see quantifier.extract_gene_coordinates)
+# ---------------------------------------------------------------------------
+
+def write_gene_coordinates(
+    out_prefix: str | Path,
+    rows: list[dict],
+) -> Path:
+    """
+    Write ``<out_prefix>.gene_coordinates.tsv``: one row per called gene
+    (best-hit protein with known Prodigal coordinates), unlike
+    gene_counts.tsv which reports one row per *family* summed across all
+    its hits.
+
+    Format::
+
+        gene    protein_id  contig  start   end     strand  gene_index
+        ectA    NODE_1_7    NODE_1  1801    2400    1       7
+        ectB    NODE_1_8    NODE_1  2410    3200    1       8
+
+    Rows are sorted by (gene, contig, start) for stable, readable output.
+    *rows* comes from :func:`osmotool.quantifier.extract_gene_coordinates`.
+    """
+    out_path = Path(str(out_prefix) + ".gene_coordinates.tsv")
+
+    ordered = sorted(rows, key=lambda r: (r["gene"], r["contig"], r["start"]))
+
+    with open(out_path, "w") as fh:
+        fh.write("gene\tprotein_id\tcontig\tstart\tend\tstrand\tgene_index\n")
+        for row in ordered:
+            fh.write(
+                f"{row['gene']}\t{row['protein_id']}\t{row['contig']}\t"
+                f"{row['start']}\t{row['end']}\t{row['strand']}\t{row['gene_index']}\n"
+            )
+
+    log.info("Wrote gene coordinates → %s", out_path)
+    return out_path
+
+
+# ---------------------------------------------------------------------------
 # aln_stats.tsv
 # ---------------------------------------------------------------------------
 

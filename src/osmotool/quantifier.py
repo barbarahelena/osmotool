@@ -32,9 +32,12 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import Iterable
+from typing import Iterable, TYPE_CHECKING
 
 from osmotool.utils import gene_family_from_header
+
+if TYPE_CHECKING:
+    from osmotool.functions import OrfCoord
 
 log = logging.getLogger("osmotool")
 
@@ -209,6 +212,42 @@ def count_hits(
         counts[family] += weight
 
     return dict(counts)
+
+
+# ---------------------------------------------------------------------------
+# Gene coordinates (annotate mode only)
+# ---------------------------------------------------------------------------
+
+def extract_gene_coordinates(
+    best_hits: dict[str, dict],
+    orf_coords: dict[str, "OrfCoord"],
+) -> list[dict]:
+    """
+    Join each best hit with its Prodigal ORF coordinates (annotate mode
+    only -- see functions.parse_orf_coordinates; profile mode has no
+    assembly so no coordinates exist there).
+
+    Returns one row per best-hit protein with known coordinates: gene,
+    protein_id, contig, start, end, strand, gene_index. A hit with no
+    matching entry in orf_coords (e.g. --proteins supplied with
+    non-Prodigal headers) is silently skipped, matching
+    parse_orf_coordinates' own degrade-gracefully behaviour.
+    """
+    rows = []
+    for protein_id, hit in best_hits.items():
+        coord = orf_coords.get(protein_id)
+        if coord is None:
+            continue
+        rows.append({
+            "gene": gene_family_from_header(hit["sseqid"]),
+            "protein_id": protein_id,
+            "contig": coord.contig,
+            "start": coord.start,
+            "end": coord.end,
+            "strand": coord.strand,
+            "gene_index": coord.gene_index,
+        })
+    return rows
 
 
 # ---------------------------------------------------------------------------
