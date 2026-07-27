@@ -6,12 +6,14 @@ from __future__ import annotations
 
 import pytest
 
+from osmotool.functions import OrfCoord
 from osmotool.quantifier import (
     select_best_hits,
     count_hits,
     compute_rpm,
     compute_rpkm,
     estimate_family_lengths,
+    extract_gene_coordinates,
     KNOWN_FAMILIES,
 )
 
@@ -219,3 +221,47 @@ class TestEstimateFamilyLengths:
         prot_lens = {"ectA|P1|Org": 200}  # keyed by sseqid, not qseqid
         lengths = estimate_family_lengths(best, prot_lens)
         assert "ectA" not in lengths
+
+
+# ---------------------------------------------------------------------------
+# extract_gene_coordinates
+# ---------------------------------------------------------------------------
+
+def _coord(contig="NODE_1", gene_index=1, start=1, end=300, strand=1) -> OrfCoord:
+    return OrfCoord(contig=contig, gene_index=gene_index, start=start, end=end, strand=strand)
+
+
+class TestExtractGeneCoordinates:
+    def test_single_hit(self):
+        best = {"NODE_1_1": _row("NODE_1_1", "ectA|P1|Org")}
+        coords = {"NODE_1_1": _coord(gene_index=1, start=1, end=300)}
+        rows = extract_gene_coordinates(best, coords)
+        assert rows == [{
+            "gene": "ectA", "protein_id": "NODE_1_1", "contig": "NODE_1",
+            "start": 1, "end": 300, "strand": 1, "gene_index": 1,
+        }]
+
+    def test_multiple_hits(self):
+        best = {
+            "NODE_1_1": _row("NODE_1_1", "ectA|P1|Org"),
+            "NODE_1_2": _row("NODE_1_2", "ectB|P2|Org"),
+        }
+        coords = {
+            "NODE_1_1": _coord(gene_index=1, start=1, end=300),
+            "NODE_1_2": _coord(gene_index=2, start=310, end=600),
+        }
+        rows = extract_gene_coordinates(best, coords)
+        assert len(rows) == 2
+        genes = {row["gene"] for row in rows}
+        assert genes == {"ectA", "ectB"}
+
+    def test_hit_without_coordinates_skipped(self):
+        """A best hit whose protein has no entry in orf_coords (e.g.
+        non-Prodigal --proteins headers) is silently dropped, matching
+        parse_orf_coordinates' own degrade-gracefully behaviour."""
+        best = {"r1": _row("r1", "ectA|P1|Org")}
+        rows = extract_gene_coordinates(best, {})
+        assert rows == []
+
+    def test_empty_best_hits(self):
+        assert extract_gene_coordinates({}, {"NODE_1_1": _coord()}) == []

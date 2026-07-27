@@ -35,10 +35,11 @@ from osmotool.quantifier import (
     estimate_family_lengths,
     filter_by_family_cutoff,
     apply_cascade_check,
+    extract_gene_coordinates,
 )
 from osmotool.output import (
     write_gene_counts, write_aln_stats, build_aln_stats, write_system_calls,
-    PROFILE_SYSTEMS_NOTE,
+    write_gene_coordinates, PROFILE_SYSTEMS_NOTE,
 )
 from osmotool.systems import detect_systems, DEFAULT_SYSTEMS, load_systems_config
 from osmotool.utils import resolve_out_prefix, check_tool
@@ -277,7 +278,7 @@ def run_annotate(
     exclude_families: str | None = None,
     skip_systems: bool = False,
     systems_config: str | None = None,
-) -> dict[str, tuple[Path, Path, Path | None]]:
+) -> dict[str, tuple[Path, Path, Path | None, Path | None]]:
     """
     Annotate an assembly (or pre-called proteins) against osmodiamond.
 
@@ -323,8 +324,10 @@ def run_annotate(
     skip_systems:
         Skip the Task 2 complex/system-aware detection layer (systems.py)
         entirely -- no <out_prefix>.systems.tsv, no Prodigal-header
-        coordinate parsing. Off by default; set True to save the (small)
-        extra parsing cost, or if you just don't need it.
+        coordinate parsing, and consequently no <out_prefix>.gene_coordinates.tsv
+        either (both depend on the same parsed ORF coordinates). Off by
+        default; set True to save the (small) extra parsing cost, or if you
+        just don't need it.
 
     systems_config:
         Optional path to a TSV overriding max_distance_genes/max_distance_bp
@@ -335,9 +338,10 @@ def run_annotate(
 
     Returns
     -------
-    {method_name: (gene_counts_path, aln_stats_path, systems_path_or_None)}
-    systems_path is None when skip_systems=True, or when no ORF had
-    coordinates (e.g. --proteins supplied with non-Prodigal headers).
+    {method_name: (gene_counts_path, aln_stats_path, systems_path_or_None, coordinates_path_or_None)}
+    systems_path/coordinates_path are None when skip_systems=True, or when
+    no ORF had coordinates (e.g. --proteins supplied with non-Prodigal
+    headers).
     """
     if method not in ("diamond", "hmm", "both"):
         raise ValueError(f"Unknown method '{method}': expected diamond, hmm, or both")
@@ -384,7 +388,7 @@ def run_annotate(
     else:
         systems_def = DEFAULT_SYSTEMS
 
-    results: dict[str, tuple[Path, Path, Path | None]] = {}
+    results: dict[str, tuple[Path, Path, Path | None, Path | None]] = {}
 
     if method in ("diamond", "both"):
         aln_file = Path(str(out_prefix) + ".blastp.tsv")
@@ -439,9 +443,10 @@ def run_annotate(
     else:
         log.info("Protein FASTA retained: %s", proteins_path)
 
-    for method_name, (counts_path, stats_path, systems_path) in results.items():
-        log.info("annotate (%s) complete: %s  %s%s", method_name, counts_path, stats_path,
-                  f"  {systems_path}" if systems_path else "")
+    for method_name, (counts_path, stats_path, systems_path, coords_path) in results.items():
+        log.info("annotate (%s) complete: %s  %s%s%s", method_name, counts_path, stats_path,
+                  f"  {systems_path}" if systems_path else "",
+                  f"  {coords_path}" if coords_path else "")
     return results
 
 
@@ -460,7 +465,7 @@ def _finish_annotate_method(
     exclude_families: str | None = None,
     orf_coords: dict | None = None,
     systems_def: dict | None = None,
-) -> tuple[Path, Path, Path | None]:
+) -> tuple[Path, Path, Path | None, Path | None]:
     """Shared best-hit selection / counting / copies_per_kb / output-writing tail for
     one annotate method (diamond or hmm), factored out since both methods
     produce identically-shaped alignment rows (see parse_hmmscan_output's
@@ -468,17 +473,21 @@ def _finish_annotate_method(
 
     orf_coords/systems_def: Task 2's system/complex detection (systems.py),
     run against this method's own best_hits -- diamond and hmm each get
-    their own independent systems.tsv, same as they already get independent
-    gene_counts.tsv/aln_stats.tsv. Skipped (systems_path=None) when
-    orf_coords is empty/None -- see run_annotate's docstring for why that
-    happens and how it degrades gracefully."""
+    their own independent systems.tsv/gene_coordinates.tsv, same as they
+    already get independent gene_counts.tsv/aln_stats.tsv. Both skipped
+    (systems_path/coords_path=None) when orf_coords is empty/None -- see
+    run_annotate's docstring for why that happens and how it degrades
+    gracefully."""
     filtered_reads = len({row["qseqid"] for row in alignments})
     best_hits = select_best_hits(iter(alignments))
 
+    excluded: set[str] = (
+        load_excluded_families(exclude_families) if exclude_families is not None else set()
+    )
+
     # annotate mode: single-end proteins (no paired weighting)
     counts = count_hits(best_hits, paired=False)
-    if exclude_families is not None:
-        excluded = load_excluded_families(exclude_families)
+    if excluded:
         counts = {fam: cnt for fam, cnt in counts.items() if fam not in excluded}
 
     # copies_per_kb: gene-family copy number normalised by mean hit-subject
@@ -513,8 +522,14 @@ def _finish_annotate_method(
     stats_path = write_aln_stats(out_prefix, stats)
 
     systems_path: Path | None = None
+    coords_path: Path | None = None
     if orf_coords:
         calls = detect_systems(best_hits, orf_coords, systems_def or DEFAULT_SYSTEMS)
         systems_path = write_system_calls(out_prefix, calls)
 
-    return counts_path, stats_path, systems_path
+        coord_rows = extract_gene_coordinates(best_hits, orf_coords)
+        if excluded:
+            coord_rows = [row for row in coord_rows if row["gene"] not in excluded]
+        coords_path = write_gene_coordinates(out_prefix, coord_rows)
+
+    return counts_path, stats_path, systems_path, coords_path

@@ -183,6 +183,7 @@ osmotool annotate \
 | `<prefix>.gene_counts.tsv` | Per-gene raw counts and normalised value (`rpm` or `copies_per_kb`, depending on mode) |
 | `<prefix>.aln_stats.tsv` | Summary statistics |
 | `<prefix>.systems.tsv` | `annotate` only — multi-subunit system calls (see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only) below) |
+| `<prefix>.gene_coordinates.tsv` | `annotate` only — per-gene contig/start/end/strand coordinates (see [`gene_coordinates.tsv` format](#gene_coordinatestsv-format-annotate-mode-only) below) |
 
 ### `gene_counts.tsv` format
 
@@ -225,6 +226,25 @@ directly comparable to `profile` mode's RPM values, which measure something
 different (community-level read abundance).
 
 **Paired-end counting**: each read of a pair counts as 0.5 (one read pair = one fragment).
+
+### `gene_coordinates.tsv` format (`annotate` mode only)
+
+Unlike `gene_counts.tsv`, which sums hits per family, this lists one row per
+individual called gene — its contig, start/end (from Prodigal, 1-based
+inclusive), strand, and Prodigal's own per-contig gene index:
+
+```
+gene    protein_id  contig  start   end     strand  gene_index
+ectA    NODE_1_7    NODE_1  1801    2400    1       7
+ectB    NODE_1_8    NODE_1  2410    3200    1       8
+```
+
+Rows are sorted by gene, then contig, then start position. Requires
+assembly-derived (Prodigal-style) coordinates, so it's only written in
+`annotate` mode, and only when those coordinates were actually parsed — it's
+skipped under the same conditions as `systems.tsv` (`--skip_systems`, or
+`--proteins` supplied with non-Prodigal headers). Excluded families (per
+`--exclude_families`) are left out here too, same as in `gene_counts.tsv`.
 
 ## Multi-subunit systems (`annotate` mode only)
 
@@ -415,7 +435,7 @@ assembly+binning step) on the same samples.
 | `--cascade` | off | `profile` only. Give reads whose DIAMOND call lands on a family with demonstrated precision problems a second opinion from `hmmscan`, using `DATABASE`'s `osmo_refdb.profile_cascade.tsv` + `hmms/osmo_refdb.hmm`. Requires `orfm`+`hmmscan` on PATH, and both files present in `DATABASE` |
 | `--proteins` | none | `annotate` only. Pre-called protein FASTA (skip Prodigal) |
 | `--keep_aln` / `--keep_proteins` | off | Retain intermediate alignment/protein files instead of deleting them after the run |
-| `--skip_systems` | off | `annotate` only. Skip the [multi-subunit systems](#multi-subunit-systems-annotate-mode-only) layer entirely — no `<prefix>.systems.tsv`, no ORF-coordinate parsing |
+| `--skip_systems` | off | `annotate` only. Skip the [multi-subunit systems](#multi-subunit-systems-annotate-mode-only) layer entirely — no `<prefix>.systems.tsv`, no `<prefix>.gene_coordinates.tsv`, no ORF-coordinate parsing |
 | `--systems_config` | none | `annotate` only. TSV overriding `max_distance_genes`/`max_distance_bp` per system (columns: `system`, `max_distance_genes`, `max_distance_bp`) — see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only) |
 
 DIAMOND per-family cutoffs (`osmo_refdb.diamond_cutoffs.tsv`) and
