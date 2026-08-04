@@ -53,26 +53,35 @@ and `:X.Y.Z` are both updated on each release.
 
 `osmotool` takes a single `DATABASE` argument: the path to an unpacked
 [`osmo_refdb`](https://github.com/barbarahelena/osmo_refdb) release
-directory (e.g. `v7/`) — download and unpack it with:
+directory (e.g. `v8/`) — download and unpack it with:
 
 ```bash
-osmotool download-db --release v7 --location /path/to/refdb
-# -> downloads + unpacks into /path/to/refdb/v7/
-osmotool profile /path/to/refdb/v7 ...
+osmotool download-db --release v8 --location /path/to/refdb
+# -> downloads + unpacks into /path/to/refdb/v8/
+osmotool profile /path/to/refdb/v8 ...
 ```
 
-`--release` defaults to `latest` (currently `v7`); `--location` defaults to
+`--release` defaults to `latest` (currently `v8`); `--location` defaults to
 the current directory. Already-extracted releases are left alone unless
 `--force` is passed, and the downloaded archive is deleted after a
 successful extraction unless `--keep_archive` is passed. The download is
 checksum-verified against Zenodo's reported md5 before extraction.
 
-**v7** (latest) — DOI: [10.5281/zenodo.21600046](https://doi.org/10.5281/zenodo.21600046).
+**v8** (latest) — DOI: [10.5281/zenodo.21691253](https://doi.org/10.5281/zenodo.21691253).
+Calibration-only fix on top of v7's panel: corrects negative-pool
+mislabeling for 8 families (murB, mrpB, mrpE, mrpF, mrpG, gshB, cspA,
+mscS) and replaces 6 families' Pfam default HMM cutoffs with locally
+calibrated ones, improving short-fragment-read sensitivity (e.g. gshB F1
+0.47→0.88, mrpE F1 0.20→0.72; panel-wide DIAMOND F1 0.827→0.832, HMM F1
+0.693→0.722). No gene/family panel changes.
+
+**v7** — DOI: [10.5281/zenodo.21600046](https://doi.org/10.5281/zenodo.21600046).
 Adds the Firmicutes compatible-solute transporters (opuA/opuB/opuC), the
 Mrp/Mnh Na⁺/H⁺ antiporter complex, gut-validated subsystems (bet/gsh/cspA),
 and Kdp backup/disambiguation genes (trk/ktr) on top of v5's original panel
 — see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only)
-above for what `annotate` mode does with the new multi-subunit ones.
+above for what `annotate` mode does with the new multi-subunit ones. Still
+downloadable (`--release v7`).
 
 **v5** — DOI: [10.5281/zenodo.21420253](https://doi.org/10.5281/zenodo.21420253).
 Still downloadable (`--release v5`) for reproducing results generated
@@ -81,9 +90,9 @@ against the original panel.
 Or download manually:
 
 ```bash
-curl -LO https://zenodo.org/records/21600046/files/v7.tar.gz
-tar -xzf v7.tar.gz    # produces a v7/ directory
-osmotool profile v7 ...
+curl -LO https://zenodo.org/records/21691253/files/v8.tar.gz
+tar -xzf v8.tar.gz    # produces a v8/ directory
+osmotool profile v8 ...
 ```
 
 Cite the DOI of whichever release you used (alongside `osmotool` itself) in
@@ -112,7 +121,7 @@ which also needs `--cascade` on the command line since it pulls in
 
 ```bash
 osmotool profile \
-  /path/to/osmo_refdb/releases/v7 \
+  /path/to/osmo_refdb/releases/v8 \
   -1 sample_R1.fastq.gz \
   -2 sample_R2.fastq.gz \
   --out_prefix results/sample \
@@ -126,7 +135,7 @@ Single-end reads:
 
 ```bash
 osmotool profile \
-  /path/to/osmo_refdb/releases/v7 \
+  /path/to/osmo_refdb/releases/v8 \
   --singles sample.fastq.gz \
   --out_prefix results/sample \
   --threads 8
@@ -139,7 +148,7 @@ hidden from the report automatically whenever
 
 ```bash
 osmotool profile \
-  /path/to/osmo_refdb/releases/v7 \
+  /path/to/osmo_refdb/releases/v8 \
   -1 sample_R1.fastq.gz -2 sample_R2.fastq.gz \
   --out_prefix results/sample \
   --cascade \
@@ -151,7 +160,7 @@ osmotool profile \
 ```bash
 # HMM (default method) with Prodigal ORF prediction:
 osmotool annotate \
-  /path/to/osmo_refdb/releases/v7 \
+  /path/to/osmo_refdb/releases/v8 \
   assembly.fasta \
   --out_prefix results/assembly \
   --threads 8
@@ -161,7 +170,7 @@ osmotool annotate \
 # applied automatically whenever osmo_refdb.diamond_cutoffs.tsv /
 # osmo_refdb.annotate_excluded_families.txt are present in DATABASE:
 osmotool annotate \
-  /path/to/osmo_refdb/releases/v7 \
+  /path/to/osmo_refdb/releases/v8 \
   assembly.fasta \
   --method diamond \
   --out_prefix results/assembly \
@@ -169,7 +178,7 @@ osmotool annotate \
 
 # With pre-called proteins (skip Prodigal):
 osmotool annotate \
-  /path/to/osmo_refdb/releases/v7 \
+  /path/to/osmo_refdb/releases/v8 \
   assembly.fasta \
   --proteins assembly_proteins.faa \
   --out_prefix results/assembly \
@@ -477,7 +486,7 @@ module load anaconda3
 conda activate osmotool
 
 osmotool profile \
-    /path/to/osmo_refdb/releases/v7 \
+    /path/to/osmo_refdb/releases/v8 \
     -1 ${SAMPLE}_R1.fastq.gz \
     -2 ${SAMPLE}_R2.fastq.gz \
     --out_prefix results/${SAMPLE} \

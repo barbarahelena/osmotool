@@ -128,7 +128,7 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "database", metavar="DATABASE",
         help="Path to an unpacked osmo_refdb release directory (e.g. "
-             "releases/v7/). osmotool finds osmo_refdb.dmnd, "
+             "releases/v8/). osmotool finds osmo_refdb.dmnd, "
              "hmms/osmo_refdb.hmm, osmo_refdb.profile_cascade.tsv, and "
              "osmo_refdb.profile_excluded_families.txt inside it by their "
              "fixed names -- no need to point at each file separately.",
@@ -196,7 +196,7 @@ def _add_download_parser(sub: argparse._SubParsersAction) -> None:
         "--location", default=".", metavar="DIR",
         help="Directory to download and unpack into. The release unpacks "
              "into a subdirectory named after the release (e.g. "
-             "<location>/v7/) -- pass that path as osmotool's DATABASE "
+             "<location>/v8/) -- pass that path as osmotool's DATABASE "
              "argument.",
     )
     p.add_argument(
@@ -223,7 +223,7 @@ def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "database", metavar="DATABASE",
         help="Path to an unpacked osmo_refdb release directory (e.g. "
-             "releases/v7/). osmotool finds osmo_refdb.dmnd, "
+             "releases/v8/). osmotool finds osmo_refdb.dmnd, "
              "hmms/osmo_refdb.hmm, osmo_refdb.diamond_cutoffs.tsv, and "
              "osmo_refdb.annotate_excluded_families.txt inside it by "
              "their fixed names -- no need to point at each file "
