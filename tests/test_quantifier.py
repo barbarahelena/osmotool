@@ -102,6 +102,11 @@ class TestCountHits:
         assert counts["ectA"] == 1.0
 
     def test_paired_weight_half(self):
+        """NOTE: "r1"/"r2" here are distinct synthetic qseqids -- this
+        does NOT exercise the real-world case where both mates of a pair
+        share an identical qseqid (see TestPairedQseqidCollision below for
+        that; this test alone would still pass even if select_best_hits()
+        silently collapsed colliding mates into one entry)."""
         best = self._best_hits({"r1": "ectA|P1|Org", "r2": "ectA|P2|Org"})
         counts = count_hits(best, paired=True)
         assert counts["ectA"] == pytest.approx(1.0)  # 2 reads × 0.5
@@ -122,6 +127,86 @@ class TestCountHits:
         best = self._best_hits({"r1": "newGene|P9|Org"})
         counts = count_hits(best)
         assert counts.get("newGene", 0.0) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Paired-end qseqid collision (see functions._merge_paired_with_mate_tags)
+# ---------------------------------------------------------------------------
+#
+# Modern Illumina headers put the mate marker AFTER the first whitespace
+# (e.g. "... 1:N:0:INDEX" / "... 2:N:0:INDEX"), so DIAMOND -- which
+# truncates headers at the first whitespace to get qseqid -- assigns both
+# mates of a fragment the SAME qseqid unless something disambiguates them
+# first. select_best_hits() is a plain dict keyed by qseqid, so a
+# collision doesn't average or combine the two mates' hits: it silently
+# keeps only the higher-scoring one and drops the other, with no error.
+# The tests below simulate DIAMOND output rows both *before* tagging (the
+# bug) and *after* it (functions._merge_paired_with_mate_tags's fix, which
+# appends _R1/_R2 to each read ID before the merged FASTQ ever reaches
+# DIAMOND) to show the fix is exactly sufficient -- select_best_hits() and
+# count_hits() need no changes of their own once qseqids are unique.
+
+class TestPairedQseqidCollision:
+    def test_colliding_qseqid_same_family_undercounts(self):
+        """The bug: both mates hit the SAME family but share one qseqid
+        (as they would under un-tagged modern Illumina headers) -- only
+        one dict entry survives, so the pair is worth 0.5, not the
+        expected 1.0. This is the case a naive fix (or no fix) would
+        still pass "by luck" if it only checked totals, not per-family
+        correctness -- see test_paired_weight_half's note."""
+        rows = [
+            _row("frag", "ectA|P1|Org", bitscore=200.0),
+            _row("frag", "ectA|P2|Org", bitscore=150.0),
+        ]
+        best = select_best_hits(iter(rows))
+        assert len(best) == 1  # the collision: one dict slot, not two
+        counts = count_hits(best, paired=True)
+        assert counts["ectA"] == pytest.approx(0.5)  # bug: should be 1.0
+
+    def test_colliding_qseqid_different_family_loses_a_mate(self):
+        """The bug, disagreeing-family variant: mate 1 hits ectA, mate 2
+        hits ectB, but they collide on qseqid -- the loser (lower
+        bitscore) vanishes entirely rather than contributing its own 0.5,
+        instead of the expected 0.5/0.5 split."""
+        rows = [
+            _row("frag", "ectA|P1|Org", bitscore=200.0),
+            _row("frag", "ectB|P2|Org", bitscore=150.0),
+        ]
+        best = select_best_hits(iter(rows))
+        counts = count_hits(best, paired=True)
+        assert counts["ectA"] == pytest.approx(0.5)
+        assert counts["ectB"] == pytest.approx(0.0)  # bug: mate 2 vanished
+
+    def test_tagged_qseqid_same_family_counts_correctly(self):
+        """The fix applied: _merge_paired_with_mate_tags appends _R1/_R2
+        before DIAMOND ever sees the reads, so what DIAMOND (and
+        therefore select_best_hits/count_hits) actually receives are
+        "frag_R1"/"frag_R2" -- distinct qseqids. Same scenario as the bug
+        test above, but this is what would have caught it: expect the
+        full 1.0, not 0.5."""
+        rows = [
+            _row("frag_R1", "ectA|P1|Org", bitscore=200.0),
+            _row("frag_R2", "ectA|P2|Org", bitscore=150.0),
+        ]
+        best = select_best_hits(iter(rows))
+        assert len(best) == 2
+        counts = count_hits(best, paired=True)
+        assert counts["ectA"] == pytest.approx(1.0)
+
+    def test_tagged_qseqid_different_family_splits_correctly(self):
+        """Fix applied, disagreeing-family variant: both mates now get
+        their own dict entry, so mate 1's 0.5 lands on ectA and mate 2's
+        0.5 lands on ectB independently -- the "independent by design"
+        behavior (see runners.run_profile's docstring) working as
+        intended, with no extra merge/reconciliation logic needed."""
+        rows = [
+            _row("frag_R1", "ectA|P1|Org", bitscore=200.0),
+            _row("frag_R2", "ectB|P2|Org", bitscore=150.0),
+        ]
+        best = select_best_hits(iter(rows))
+        counts = count_hits(best, paired=True)
+        assert counts["ectA"] == pytest.approx(0.5)
+        assert counts["ectB"] == pytest.approx(0.5)
 
 
 # ---------------------------------------------------------------------------
