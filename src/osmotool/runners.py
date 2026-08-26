@@ -25,6 +25,7 @@ from osmotool.functions import (
     load_excluded_families,
     extract_fastq_subset,
     strip_orf_suffix,
+    strip_mate_tag,
     count_reads,
 )
 from osmotool.quantifier import (
@@ -83,18 +84,23 @@ def run_profile(
         Pre-computed total read count.  Supply to skip on-the-fly counting
         (useful when already known from FastQC / MultiQC).
     hmm_db, cascade_config:
-        Optional two-stage DIAMOND+HMM cascade. DIAMOND stays the primary
-        caller for every read (needed for speed at millions-of-reads
-        scale, and HMM's GA cutoffs don't apply to read fragments
-        anyway), but reads whose DIAMOND call lands on a family flagged
-        in osmo_refdb's <release>.profile_cascade.tsv (real, demonstrated
-        precision problems, e.g. betL vs betT/CaiT) get pulled out,
-        6-frame translated, and re-scored with hmmscan using a
+        Two-stage DIAMOND+HMM cascade. DIAMOND stays the primary caller for
+        every read (needed for speed at millions-of-reads scale, and HMM's
+        GA cutoffs don't apply to read fragments anyway), but reads whose
+        DIAMOND call lands on a family flagged in osmo_refdb's
+        <release>.profile_cascade.tsv (real, demonstrated precision
+        problems -- e.g. betL vs betT/CaiT, and several families as low as
+        5-25% DIAMOND-only precision in osmo_refdb's own benchmark) get
+        pulled out, 6-frame translated, and re-scored with hmmscan using a
         short-read-calibrated threshold (NOT --cut_ga -- see
         run_hmmscan's docstring) as a second opinion; failing reads are
         dropped. Only that flagged subset pays the extra cost, not the
         whole dataset. Both must be supplied together, and require orfm +
-        hmmscan on PATH.
+        hmmscan on PATH. At this function level these default to None
+        (DIAMOND-only) for library callers, but osmotool's CLI (`profile`)
+        enables the cascade by default -- given the precision numbers
+        above, DIAMOND-only should be treated as the opt-out, not the
+        default, for any caller reporting results.
     exclude_families:
         Optional path to osmo_refdb's <release>.profile_excluded_families.txt
         (families marked scope: annotate_only, e.g. murB -- a
@@ -208,22 +214,33 @@ def _apply_profile_cascade(
     """Second-opinion check for `profile`'s DIAMOND+HMM cascade: pull just
     the reads whose DIAMOND call landed on a flagged family, re-score them
     with hmmscan (raw bit scores), and drop any that fail that family's
-    short-read-calibrated threshold. See run_profile's docstring."""
+    short-read-calibrated threshold. See run_profile's docstring.
+
+    best_hits' qseqids are _R1/_R2-tagged for paired input (see
+    functions._merge_paired_with_mate_tags), but the actual R1/R2 FASTQ
+    files on disk are untagged -- extract_fastq_subset() reads reads back
+    out of *those* original files, so flagged_read_ids (and later,
+    cascade_scores) must use the untagged id via strip_mate_tag() to find
+    them. Single-end qseqids are never tagged, so strip_mate_tag() is a
+    no-op there.
+    """
     cutoffs = load_cascade_config(cascade_config)
-    flagged_read_ids = {
+    flagged_qids = {
         qid for qid, row in best_hits.items()
         if row["sseqid"].split("|")[0] in cutoffs
     }
-    if not flagged_read_ids:
+    if not flagged_qids:
         log.info("Cascade: no reads called to a flagged family, nothing to re-check.")
         return best_hits
 
     log.info("Cascade: re-checking %d/%d reads called to a flagged family (%s)",
-              len(flagged_read_ids), len(best_hits), ", ".join(sorted(cutoffs)))
+              len(flagged_qids), len(best_hits), ", ".join(sorted(cutoffs)))
 
     subset_fastq = Path(str(out_prefix) + ".cascade_subset.fastq")
     input_files = [f for f in (reads1, reads2, singles) if f is not None]
-    extract_fastq_subset(input_files, flagged_read_ids, subset_fastq)
+    # extract_fastq_subset reads back from the original, untagged R1/R2
+    # files, so it needs untagged ids -- see this function's docstring.
+    extract_fastq_subset(input_files, {strip_mate_tag(qid) for qid in flagged_qids}, subset_fastq)
 
     orfs_faa = Path(str(out_prefix) + ".cascade.orfs.faa")
     run_orfm(subset_fastq, orfs_faa)
@@ -239,9 +256,25 @@ def _apply_profile_cascade(
         if hit["bitscore"] > per_read.get(family, 0.0):
             per_read[family] = hit["bitscore"]
 
-    filtered = apply_cascade_check(best_hits, cascade_scores, cutoffs)
+    # cascade_scores is keyed by the untagged original read ID (recovered
+    # via strip_orf_suffix from headers orfm/hmmscan saw, which trace back
+    # through extract_fastq_subset's verbatim copy of the original,
+    # untagged FASTQ headers) -- re-key it to match best_hits' _R1/_R2-
+    # tagged qseqids so apply_cascade_check's per-qid lookup lines up.
+    # NOTE: if both mates of one fragment share an identical original
+    # header (exactly the ambiguity the tagging exists to resolve) AND
+    # both independently land on a flagged family, their re-check scores
+    # get merged under that one shared original ID in cascade_scores
+    # (orfm/hmmscan have no mate awareness), so each mate's cascade
+    # decision here uses the best-of-both-mates score rather than a
+    # strictly mate-specific one. A narrow, compounding edge case
+    # (--cascade + paired + a real header collision + both mates
+    # independently flagged) -- fully closing it would require
+    # extract_fastq_subset to also re-tag headers per source file.
+    scores_by_qid = {qid: cascade_scores.get(strip_mate_tag(qid), {}) for qid in best_hits}
+    filtered = apply_cascade_check(best_hits, scores_by_qid, cutoffs)
     log.info("Cascade: %d/%d flagged-family reads confirmed by HMM, rest dropped",
-              sum(1 for qid in flagged_read_ids if qid in filtered), len(flagged_read_ids))
+              sum(1 for qid in flagged_qids if qid in filtered), len(flagged_qids))
 
     if not keep_aln:
         subset_fastq.unlink(missing_ok=True)

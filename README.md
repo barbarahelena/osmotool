@@ -9,7 +9,7 @@ Screen osmoadaptation genes in metagenomic datasets using [DIAMOND](https://gith
 | Subcommand | Input | Method |
 |---|---|---|
 | `download-db` | — | Downloads and unpacks an [`osmo_refdb`](https://github.com/barbarahelena/osmo_refdb) release from Zenodo |
-| `profile` | FASTQ reads (paired or single-end) | `diamond blastx` (6-frame translation), optionally with a DIAMOND+HMM cascade (`--cascade`) |
+| `profile` | FASTQ reads (paired or single-end) | `diamond blastx` (6-frame translation) with a DIAMOND+HMM cascade on by default (`--no_cascade` to disable) |
 | `annotate` | Assembly FASTA (or pre-called proteins) | Prodigal → `hmmscan --cut_ga` (default), or `diamond blastp` (`--method diamond`) |
 
 Both modes produce per-gene raw counts and a normalised value: `profile`
@@ -104,20 +104,32 @@ filename — no need to point at each file separately:
 | File | Used by |
 |---|---|
 | `osmo_refdb.dmnd` | both (DIAMOND database) |
-| `hmms/osmo_refdb.hmm` (+ `.h3*` indices) | `annotate`'s default `--method hmm`/`both`; `profile --cascade` |
-| `osmo_refdb.profile_cascade.tsv` | `profile --cascade` |
+| `hmms/osmo_refdb.hmm` (+ `.h3*` indices) | `annotate`'s default `--method hmm`/`both`; `profile`'s cascade (on by default) |
+| `osmo_refdb.profile_cascade.tsv` | `profile`'s cascade (on by default) |
 | `osmo_refdb.diamond_cutoffs.tsv` | `annotate --method diamond`/`both` (auto-applied if present) |
 | `osmo_refdb.profile_excluded_families.txt` | `profile` (auto-applied if present) |
 | `osmo_refdb.annotate_excluded_families.txt` | `annotate` (auto-applied if present) |
 
 Only `osmo_refdb.dmnd` is required. Everything else is optional and used
-automatically when present, except the `profile` DIAMOND+HMM cascade,
-which also needs `--cascade` on the command line since it pulls in
-`orfm` + `hmmscan` as extra dependencies.
+automatically when present, including the `profile` DIAMOND+HMM cascade
+— it's on by default whenever `hmms/osmo_refdb.hmm` and
+`osmo_refdb.profile_cascade.tsv` are both present in `DATABASE`, since
+several families run as low as 5-25% precision on DIAMOND alone (see
+osmo_refdb's own benchmark). It also needs `orfm` + `hmmscan` on PATH; if
+either file is missing or those tools aren't installed, `profile` fails
+fast with an error rather than silently reporting DIAMOND-only numbers —
+pass `--no_cascade` to opt out and run DIAMOND-only intentionally.
 
 ## Usage
 
 ### Profile reads (FASTQ)
+
+This runs with the DIAMOND+HMM cascade on by default (a second HMM
+opinion on families with demonstrated DIAMOND precision problems —
+requires `orfm` + `hmmscan` on PATH; see [Reference database](#reference-database)
+above). Scope-excluded families are hidden from the report automatically
+whenever `osmo_refdb.profile_excluded_families.txt` is present in
+`DATABASE`:
 
 ```bash
 osmotool profile \
@@ -141,17 +153,14 @@ osmotool profile \
   --threads 8
 ```
 
-With the DIAMOND+HMM cascade (a second HMM opinion on families with
-demonstrated DIAMOND precision problems). Scope-excluded families are
-hidden from the report automatically whenever
-`osmo_refdb.profile_excluded_families.txt` is present in `DATABASE`:
+DIAMOND-only, e.g. when `orfm`/`hmmscan` aren't installed:
 
 ```bash
 osmotool profile \
   /path/to/osmo_refdb/releases/v8 \
   -1 sample_R1.fastq.gz -2 sample_R2.fastq.gz \
   --out_prefix results/sample \
-  --cascade \
+  --no_cascade \
   --threads 8
 ```
 
@@ -441,7 +450,7 @@ assembly+binning step) on the same samples.
 | `--tmpdir` | `$TMPDIR` | Temp directory for merged paired-end FASTQ |
 | `--total_reads` | *(counted)* | Skip read counting when count is already known |
 | `--method` | `hmm` (annotate only) | `diamond`, `hmm`, or `both`. `profile` is DIAMOND-only (HMM's GA cutoffs don't apply to short read fragments); `annotate` defaults to HMM since it's meaningfully more specific on full-length ORFs. Requires `hmms/osmo_refdb.hmm` present in `DATABASE` for `hmm`/`both` |
-| `--cascade` | off | `profile` only. Give reads whose DIAMOND call lands on a family with demonstrated precision problems a second opinion from `hmmscan`, using `DATABASE`'s `osmo_refdb.profile_cascade.tsv` + `hmms/osmo_refdb.hmm`. Requires `orfm`+`hmmscan` on PATH, and both files present in `DATABASE` |
+| `--no_cascade` | off (cascade on by default) | `profile` only. Disables the DIAMOND+HMM cascade, which by default gives reads whose DIAMOND call lands on a family with demonstrated precision problems (several as low as 5-25% DIAMOND-only precision) a second opinion from `hmmscan`, using `DATABASE`'s `osmo_refdb.profile_cascade.tsv` + `hmms/osmo_refdb.hmm`. The cascade requires `orfm`+`hmmscan` on PATH and both files present in `DATABASE`; pass this flag to run DIAMOND-only if you don't have them |
 | `--proteins` | none | `annotate` only. Pre-called protein FASTA (skip Prodigal) |
 | `--keep_aln` / `--keep_proteins` | off | Retain intermediate alignment/protein files instead of deleting them after the run |
 | `--skip_systems` | off | `annotate` only. Skip the [multi-subunit systems](#multi-subunit-systems-annotate-mode-only) layer entirely — no `<prefix>.systems.tsv`, no `<prefix>.gene_coordinates.tsv`, no ORF-coordinate parsing |

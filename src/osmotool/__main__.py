@@ -23,15 +23,19 @@ def main(argv: list[str] | None = None) -> int:
             if args.reads2 is not None and args.reads1 is None:
                 parser.error("-2/--reads2 requires -1/--reads1")
             refdb = resolve_refdb(args.database, mode="profile")
-            if args.cascade and refdb.hmm is None:
+            cascade_enabled = not args.no_cascade
+            if cascade_enabled and refdb.hmm is None:
                 parser.error(
-                    f"--cascade requires hmms/osmo_refdb.hmm in {args.database}, "
-                    "but it wasn't found"
+                    f"the DIAMOND+HMM cascade (on by default) requires "
+                    f"hmms/osmo_refdb.hmm in {args.database}, but it wasn't "
+                    "found. Pass --no_cascade to run DIAMOND-only instead."
                 )
-            if args.cascade and refdb.cascade_config is None:
+            if cascade_enabled and refdb.cascade_config is None:
                 parser.error(
-                    f"--cascade requires osmo_refdb.profile_cascade.tsv in "
-                    f"{args.database}, but it wasn't found"
+                    f"the DIAMOND+HMM cascade (on by default) requires "
+                    f"osmo_refdb.profile_cascade.tsv in {args.database}, but "
+                    "it wasn't found. Pass --no_cascade to run DIAMOND-only "
+                    "instead."
                 )
             run_profile(
                 str(refdb.dmnd),
@@ -48,8 +52,8 @@ def main(argv: list[str] | None = None) -> int:
                 keep_aln=args.keep_aln,
                 tmpdir=args.tmpdir,
                 total_reads=args.total_reads,
-                hmm_db=str(refdb.hmm) if args.cascade else None,
-                cascade_config=str(refdb.cascade_config) if args.cascade else None,
+                hmm_db=str(refdb.hmm) if cascade_enabled else None,
+                cascade_config=str(refdb.cascade_config) if cascade_enabled else None,
                 exclude_families=str(refdb.exclude_families) if refdb.exclude_families else None,
             )
 

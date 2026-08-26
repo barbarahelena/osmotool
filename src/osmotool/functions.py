@@ -120,9 +120,11 @@ def _prepare_query(
     Return (query_path, is_temporary).
 
     If only one file is given, return it directly (is_temporary=False).
-    For paired-end, concatenate R1 + R2 into a temp file under *tmpdir*
+    For paired-end, merge R1 + R2 into one temp FASTQ under *tmpdir*
     (resolved via :func:`~osmotool.utils.get_tmpdir`, honouring ``$TMPDIR``
-    for HPC node-local scratch).
+    for HPC node-local scratch) via _merge_paired_with_mate_tags, which
+    tags each read ID so the two mates can never collide under DIAMOND's
+    qseqid.
     """
     if singles is not None:
         return Path(singles), False
@@ -137,18 +139,49 @@ def _prepare_query(
         tmp.close()
         merged = Path(tmp.name)
         log.debug("Merging paired reads → %s (tmpdir=%s)", merged, scratch)
-        _cat_files([Path(reads1), Path(reads2)], merged)
+        _merge_paired_with_mate_tags(Path(reads1), Path(reads2), merged)
         return merged, True
     raise ValueError("Provide either --singles or -1/--reads1 (with optional -2/--reads2).")
 
 
-def _cat_files(sources: list[Path], dest: Path) -> None:
-    """Byte-level concatenation of *sources* into *dest* (handles gzip)."""
-    with open(dest, "wb") as out_fh:
-        for src in sources:
-            with open(src, "rb") as in_fh:
-                while chunk := in_fh.read(1 << 20):
-                    out_fh.write(chunk)
+def _merge_paired_with_mate_tags(reads1: Path, reads2: Path, dest: Path) -> None:
+    """
+    Merge R1 + R2 into one gzipped FASTQ for a single DIAMOND invocation,
+    appending _R1/_R2 onto each read ID so the two mates of a pair can
+    never collide under DIAMOND's qseqid (the header up to the first
+    whitespace).
+
+    This matters for modern Illumina headers, which put the mate marker
+    AFTER that whitespace (e.g. "... 1:N:0:INDEX" / "... 2:N:0:INDEX") --
+    without tagging, both mates of a fragment would produce an identical
+    qseqid, and quantifier.select_best_hits()'s dict (keyed by qseqid)
+    would silently keep only the higher-scoring mate's hit, discarding the
+    other mate's 0.5 count entirely instead of reporting both (see
+    quantifier.count_hits' paired-weighting docstring). Older
+    "READID/1"/"READID/2"-style headers already avoid this by luck, not by
+    design -- tagging here makes correctness independent of header
+    convention rather than relying on it.
+    """
+    import gzip
+
+    with gzip.open(dest, "wt", compresslevel=1) as out_fh:
+        for path, tag in ((reads1, "_R1"), (reads2, "_R2")):
+            opener = gzip.open if path.suffix == ".gz" else open
+            with opener(path, "rt") as in_fh:
+                for i, line in enumerate(in_fh):
+                    if i % 4 != 0:
+                        out_fh.write(line)
+                        continue
+                    if not line.startswith("@"):
+                        raise ValueError(
+                            f"Malformed FASTQ header in {path} "
+                            f"(record starting at line {i + 1}): {line!r}"
+                        )
+                    read_id, sep, rest = line[1:].rstrip("\n").partition(" ")
+                    header = f"@{read_id}{tag}"
+                    if sep:
+                        header += f" {rest}"
+                    out_fh.write(header + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +344,17 @@ def strip_orf_suffix(orf_id: str) -> str:
     expected suffix pattern."""
     m = ORF_SUFFIX_RE.match(orf_id)
     return m.group(1) if m else orf_id
+
+
+def strip_mate_tag(read_id: str) -> str:
+    """Undo the _R1/_R2 suffix _merge_paired_with_mate_tags appends to
+    disambiguate mate qseqids, recovering the original FASTQ read ID (as
+    it appears, untagged, in the actual R1/R2 input files). Returns
+    read_id unchanged if it doesn't end in _R1/_R2 -- e.g. single-end
+    reads, which are never tagged since there's no mate to collide with."""
+    if read_id.endswith("_R1") or read_id.endswith("_R2"):
+        return read_id[:-3]
+    return read_id
 
 
 def run_orfm(fastq_path: str | Path, out_faa: str | Path) -> Path:
