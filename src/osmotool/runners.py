@@ -13,11 +13,11 @@ from pathlib import Path
 from osmotool.functions import (
     run_diamond_blastx,
     run_diamond_blastp,
-    run_hmmscan,
+    run_hmmsearch,
     run_orfm,
     run_prodigal,
     parse_diamond_output,
-    parse_hmmscan_output,
+    parse_hmmsearch_output,
     parse_protein_lengths,
     parse_orf_coordinates,
     load_diamond_cutoffs,
@@ -91,12 +91,12 @@ def run_profile(
         <release>.profile_cascade.tsv (real, demonstrated precision
         problems -- e.g. betL vs betT/CaiT, and several families as low as
         5-25% DIAMOND-only precision in osmo_refdb's own benchmark) get
-        pulled out, 6-frame translated, and re-scored with hmmscan using a
+        pulled out, 6-frame translated, and re-scored with hmmsearch using a
         short-read-calibrated threshold (NOT --cut_ga -- see
-        run_hmmscan's docstring) as a second opinion; failing reads are
+        run_hmmsearch's docstring) as a second opinion; failing reads are
         dropped. Only that flagged subset pays the extra cost, not the
         whole dataset. Both must be supplied together, and require orfm +
-        hmmscan on PATH. At this function level these default to None
+        hmmsearch on PATH. At this function level these default to None
         (DIAMOND-only) for library callers, but osmotool's CLI (`profile`)
         enables the cascade by default -- given the precision numbers
         above, DIAMOND-only should be treated as the opt-out, not the
@@ -124,7 +124,7 @@ def run_profile(
         if hmm_db is None:
             raise ValueError("hmm_db is required when cascade_config is given")
         check_tool("orfm")
-        check_tool("hmmscan")
+        check_tool("hmmsearch")
 
     paired = reads1 is not None and reads2 is not None
     resolve_out_prefix(out_prefix)
@@ -213,7 +213,7 @@ def _apply_profile_cascade(
 ) -> dict[str, dict]:
     """Second-opinion check for `profile`'s DIAMOND+HMM cascade: pull just
     the reads whose DIAMOND call landed on a flagged family, re-score them
-    with hmmscan (raw bit scores), and drop any that fail that family's
+    with hmmsearch (raw bit scores), and drop any that fail that family's
     short-read-calibrated threshold. See run_profile's docstring.
 
     best_hits' qseqids are _R1/_R2-tagged for paired input (see
@@ -245,11 +245,11 @@ def _apply_profile_cascade(
     orfs_faa = Path(str(out_prefix) + ".cascade.orfs.faa")
     run_orfm(subset_fastq, orfs_faa)
 
-    hmm_tblout = Path(str(out_prefix) + ".cascade.hmmscan.tblout")
-    run_hmmscan(hmm_db, orfs_faa, hmm_tblout, threads=threads, use_cut_ga=False)
+    hmm_tblout = Path(str(out_prefix) + ".cascade.hmmsearch.tblout")
+    run_hmmsearch(hmm_db, orfs_faa, hmm_tblout, threads=threads, use_cut_ga=False)
 
     cascade_scores: dict[str, dict[str, float]] = {}
-    for hit in parse_hmmscan_output(hmm_tblout):
+    for hit in parse_hmmsearch_output(hmm_tblout):
         read_id = strip_orf_suffix(hit["qseqid"])
         family = hit["sseqid"]
         per_read = cascade_scores.setdefault(read_id, {})
@@ -257,7 +257,7 @@ def _apply_profile_cascade(
             per_read[family] = hit["bitscore"]
 
     # cascade_scores is keyed by the untagged original read ID (recovered
-    # via strip_orf_suffix from headers orfm/hmmscan saw, which trace back
+    # via strip_orf_suffix from headers orfm/hmmsearch saw, which trace back
     # through extract_fastq_subset's verbatim copy of the original,
     # untagged FASTQ headers) -- re-key it to match best_hits' _R1/_R2-
     # tagged qseqids so apply_cascade_check's per-qid lookup lines up.
@@ -265,7 +265,7 @@ def _apply_profile_cascade(
     # header (exactly the ambiguity the tagging exists to resolve) AND
     # both independently land on a flagged family, their re-check scores
     # get merged under that one shared original ID in cascade_scores
-    # (orfm/hmmscan have no mate awareness), so each mate's cascade
+    # (orfm/hmmsearch have no mate awareness), so each mate's cascade
     # decision here uses the best-of-both-mates score rather than a
     # strictly mate-specific one. A narrow, compounding edge case
     # (--cascade + paired + a real header collision + both mates
@@ -323,14 +323,14 @@ def run_annotate(
 
     Unlike `profile` (short reads), annotate works on full-length
     Prodigal-called ORFs -- exactly the scale osmo_refdb's HMM GA cutoffs
-    are calibrated against, so hmmscan --cut_ga is a meaningful, cheap
+    are calibrated against, so hmmsearch --cut_ga is a meaningful, cheap
     check here (a bacterial genome is a few thousand proteins, not
     millions of reads) and gives a per-family specificity gate DIAMOND's
     flat --min_identity doesn't have. Real-genome testing (E. coli K-12)
     confirmed this in practice: HMM correctly rejected a betT/CaiT
     paralog DIAMOND called as betL, and correctly resolved proP to its
     true single copy where DIAMOND over-called 4. "hmm"/"both" require
-    --hmm_db and hmmscan on PATH; pass method="diamond" to avoid the
+    --hmm_db and hmmsearch on PATH; pass method="diamond" to avoid the
     HMMER dependency, at the cost of reintroducing those failure modes.
 
     diamond_cutoffs: optional path to osmo_refdb's
@@ -340,7 +340,7 @@ def run_annotate(
     full-length protein-vs-protein DIAMOND alignments (same scale as
     Prodigal ORFs here), and applying them to short read fragments would
     hit the identical scale-mismatch problem HMM's GA cutoffs have on
-    short reads (see run_hmmscan's docstring) -- a short read can never
+    short reads (see run_hmmsearch's docstring) -- a short read can never
     reach a bitscore calibrated against full-length sequences.
 
     exclude_families:
@@ -384,7 +384,7 @@ def run_annotate(
     if method in ("diamond", "both"):
         check_tool("diamond")
     if method in ("hmm", "both"):
-        check_tool("hmmscan")
+        check_tool("hmmsearch")
     if proteins is None:
         check_tool("prodigal")
 
@@ -455,9 +455,9 @@ def run_annotate(
             log.info("Alignment file retained: %s", aln_file)
 
     if method in ("hmm", "both"):
-        hmm_aln_file = Path(str(out_prefix) + ".hmmscan.tblout")
-        run_hmmscan(hmm_db, proteins_path, hmm_aln_file, threads=threads)
-        hmm_alignments = list(parse_hmmscan_output(hmm_aln_file))
+        hmm_aln_file = Path(str(out_prefix) + ".hmmsearch.tblout")
+        run_hmmsearch(hmm_db, proteins_path, hmm_aln_file, threads=threads)
+        hmm_alignments = list(parse_hmmsearch_output(hmm_aln_file))
         results["hmm"] = _finish_annotate_method(
             "hmm", out_prefix if method == "hmm" else f"{out_prefix}.hmm",
             hmm_alignments, protein_lengths, total_proteins, db=str(hmm_db),
@@ -501,7 +501,7 @@ def _finish_annotate_method(
 ) -> tuple[Path, Path, Path | None, Path | None]:
     """Shared best-hit selection / counting / copies_per_kb / output-writing tail for
     one annotate method (diamond or hmm), factored out since both methods
-    produce identically-shaped alignment rows (see parse_hmmscan_output's
+    produce identically-shaped alignment rows (see parse_hmmsearch_output's
     docstring) and go through the same quantification and output steps.
 
     orf_coords/systems_def: Task 2's system/complex detection (systems.py),

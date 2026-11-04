@@ -136,3 +136,82 @@ class TestStripMateTag:
 
     def test_unchanged_for_unrelated_trailing_text(self):
         assert strip_mate_tag("frag_R12") == "frag_R12"
+
+
+# ---------------------------------------------------------------------------
+# hmmsearch tblout parsing
+# ---------------------------------------------------------------------------
+#
+# hmmsearch's tblout puts the *sequence* in column 0 and the *HMM* in
+# column 2 -- the reverse of hmmscan. A swap here would silently turn every
+# protein ID into a "family" and vice versa, so pin the orientation down.
+
+from osmotool.functions import count_hmm_models, parse_hmmsearch_output
+
+_HMMSEARCH_TBLOUT = """\
+#                                                               --- full sequence ---- --- best 1 domain ---- --- domain number estimation ----
+# target name        accession  query name           accession    E-value  score  bias   E-value  score  bias   exp reg clu  ov env dom rep inc description of target
+#------------------- ---------- -------------------- ---------- --------- ------ ----- --------- ------ -----   --- --- --- --- --- --- --- --- ---------------------
+NC_000913.3_890      -          opuCA                -              8e-50  160.9   0.1   1.1e-49  160.5   0.1   1.0   1   0   0   1   1   1   1 # 1 # 1200 # 1 # ID=1_890
+NC_000913.3_12       -          betL                 -            3.2e-07   25.4   2.0   4.1e-07   25.0   2.0   1.1   1   0   0   1   1   1   1 # 5 # 900 # -1 # ID=1_12
+#
+# Program:         hmmsearch
+"""
+
+
+class TestParseHmmsearchOutput:
+    def test_sequence_is_qseqid_and_hmm_is_sseqid(self, tmp_path):
+        tbl = tmp_path / "x.tblout"
+        tbl.write_text(_HMMSEARCH_TBLOUT)
+        rows = list(parse_hmmsearch_output(tbl))
+        assert rows == [
+            {"qseqid": "NC_000913.3_890", "sseqid": "opuCA", "evalue": 8e-50, "bitscore": 160.9},
+            {"qseqid": "NC_000913.3_12", "sseqid": "betL", "evalue": 3.2e-07, "bitscore": 25.4},
+        ]
+
+    def test_empty_tblout(self, tmp_path):
+        tbl = tmp_path / "x.tblout"
+        tbl.write_text("# only comments\n#\n")
+        assert list(parse_hmmsearch_output(tbl)) == []
+
+
+class TestCountHmmModels:
+    def test_counts_name_lines(self, tmp_path):
+        hmm = tmp_path / "db.hmm"
+        hmm.write_text(
+            "HMMER3/f [3.4 | Aug 2023]\nNAME  betL\nLENG  500\n//\n"
+            "HMMER3/f [3.4 | Aug 2023]\nNAME  opuCA\nLENG  380\n//\n"
+        )
+        assert count_hmm_models(hmm) == 2
+
+    def test_rejects_non_hmm_file(self, tmp_path):
+        bad = tmp_path / "db.hmm"
+        bad.write_text(">seq\nMKV\n")
+        with pytest.raises(ValueError):
+            count_hmm_models(bad)
+
+
+# ---------------------------------------------------------------------------
+# strip_orf_suffix (orfm ORF ID → original read ID, used by the cascade)
+# ---------------------------------------------------------------------------
+
+from osmotool.functions import strip_orf_suffix
+
+
+class TestStripOrfSuffix:
+    @pytest.mark.parametrize("orf_id, read_id", [
+        # legacy /1 /2 mate markers
+        ("read42/1_1_2_3", "read42/1"),
+        ("read42/2_10_4_1", "read42/2"),
+        # no mate marker: single-end reads, and modern Illumina headers
+        # whose mate marker sits after the whitespace orfm drops
+        ("r215486_3_3_4", "r215486"),
+        ("A00123:8:H5:1:1101:1000:2000_1_1_4", "A00123:8:H5:1:1101:1000:2000"),
+        # underscores inside the read ID itself are preserved
+        ("SRR123_456.7_2_5_1", "SRR123_456.7"),
+    ])
+    def test_recovers_read_id(self, orf_id, read_id):
+        assert strip_orf_suffix(orf_id) == read_id
+
+    def test_non_orfm_id_passes_through(self):
+        assert strip_orf_suffix("not_an_orf") == "not_an_orf"
