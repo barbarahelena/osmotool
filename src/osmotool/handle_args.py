@@ -173,6 +173,19 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
              "you don't have them.",
     )
 
+    norm = p.add_argument_group("copies-per-genome normalisation")
+    norm.add_argument(
+        "--no_markers", action="store_true", default=False,
+        help="Skip copies-per-genome normalisation. By default, when "
+             "DATABASE ships a markers/ subdirectory (universal single-copy "
+             "marker genes), reads are also searched against it in a second "
+             "DIAMOND pass and gene_counts.tsv gains a copies_per_genome "
+             "column (family reads per kb / mean marker reads per kb, "
+             "MicrobeCensus-style MAD outlier removal), plus "
+             "<out_prefix>.markers.tsv with the per-marker evidence. "
+             "Releases without markers/ are unaffected.",
+    )
+
     _add_filter_args(p)
     _add_output_args(p)
     _add_hpc_args(p)

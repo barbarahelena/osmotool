@@ -4,12 +4,15 @@ __main__.py — osmotool CLI entry point
 
 from __future__ import annotations
 
+import logging
 import sys
 
 from osmotool.handle_args import build_parser
 from osmotool.runners import run_profile, run_annotate
 from osmotool.download import download_refdb
 from osmotool.utils import setup_logging, resolve_refdb
+
+log = logging.getLogger("osmotool")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,6 +40,17 @@ def main(argv: list[str] | None = None) -> int:
                     "it wasn't found. Pass --no_cascade to run DIAMOND-only "
                     "instead."
                 )
+            markers = None if args.no_markers else refdb.markers
+            if markers is None and not args.no_markers:
+                log.info("No markers/ in %s: copies_per_genome not reported "
+                         "(release predates marker normalisation).", args.database)
+            if markers is not None and refdb.train_refs is None:
+                parser.error(
+                    f"copies-per-genome normalisation needs "
+                    f"osmo_refdb.train_refs.faa in {args.database} (for "
+                    "reference lengths), but it wasn't found. Pass "
+                    "--no_markers to skip normalisation."
+                )
             run_profile(
                 str(refdb.dmnd),
                 args.out_prefix,
@@ -55,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
                 hmm_db=str(refdb.hmm) if cascade_enabled else None,
                 cascade_config=str(refdb.cascade_config) if cascade_enabled else None,
                 exclude_families=str(refdb.exclude_families) if refdb.exclude_families else None,
+                markers=markers,
+                train_refs=str(refdb.train_refs) if markers is not None else None,
             )
 
         elif args.subcommand == "annotate":

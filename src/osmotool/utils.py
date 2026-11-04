@@ -113,12 +113,45 @@ def get_tmpdir(override: str | Path | None = None) -> Path:
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
+class MarkerDb:
+    """A release's markers/ subdirectory (osmo_refdb pipeline/12_package_markers.py):
+    universal single-copy marker genes for profile's copies-per-genome
+    normalisation -- see normalise.py."""
+    dmnd: Path
+    refs: Path                 # source FASTA, for reference lengths
+    manifest: Path             # marker names (+ build metadata)
+    exclude_families: Path | None   # decoy labels, never counted
+
+
+@dataclass(frozen=True)
 class RefDb:
     dmnd: Path
     hmm: Path | None
     cascade_config: Path | None
     diamond_cutoffs: Path | None
     exclude_families: Path | None
+    train_refs: Path | None = None    # osmo_refdb.train_refs.faa (profile only)
+    markers: MarkerDb | None = None   # markers/ (profile only)
+
+
+def _resolve_markers(root: Path) -> MarkerDb | None:
+    """markers/osmo_markers.* when the release ships them (osmo_refdb
+    releases built before marker normalisation don't). All of dmnd, refs and
+    manifest must be present; the decoy list is optional."""
+    d = root / "markers"
+    dmnd, refs, manifest = (d / "osmo_markers.dmnd", d / "osmo_markers.train_refs.faa",
+                            d / "osmo_markers.manifest.tsv")
+    if not dmnd.exists():
+        return None
+    missing = [p.name for p in (refs, manifest) if not p.exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"{d} has osmo_markers.dmnd but is missing {', '.join(missing)} -- "
+            "repackage it with osmo_refdb's pipeline/12_package_markers.py"
+        )
+    excluded = d / "osmo_markers.excluded_families.txt"
+    return MarkerDb(dmnd=dmnd, refs=refs, manifest=manifest,
+                    exclude_families=excluded if excluded.exists() else None)
 
 
 def resolve_refdb(database: str, mode: str) -> RefDb:
@@ -131,7 +164,9 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
     ``osmo_refdb.diamond_cutoffs.tsv``,
     ``osmo_refdb.profile_excluded_families.txt``, and
     ``osmo_refdb.annotate_excluded_families.txt``. This lets callers pass
-    one directory instead of wiring up each file individually.
+    one directory instead of wiring up each file individually. In profile
+    mode it also resolves ``osmo_refdb.train_refs.faa`` and the optional
+    ``markers/`` subdirectory used for copies-per-genome normalisation.
 
     *mode* is ``"profile"`` or ``"annotate"`` -- the only difference is
     which excluded-families list and cascade/cutoffs file apply. The
@@ -168,7 +203,15 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
     if exclude_families is not None and not exclude_families.exists():
         exclude_families = None
 
+    train_refs, markers = None, None
+    if mode == "profile":
+        train_refs = root / "osmo_refdb.train_refs.faa"
+        if not train_refs.exists():
+            train_refs = None
+        markers = _resolve_markers(root)
+
     return RefDb(
         dmnd=dmnd, hmm=hmm, cascade_config=cascade_config,
         diamond_cutoffs=diamond_cutoffs, exclude_families=exclude_families,
+        train_refs=train_refs, markers=markers,
     )

@@ -27,6 +27,7 @@ def write_gene_counts(
     filtered_reads: int,
     normalisation: str = "rpm",  # "rpm" or "copies_per_kb"
     total_reads_label: str = "total_reads",
+    copies_per_genome: dict[str, float | None] | None = None,
 ) -> Path:
     """
     Write ``<out_prefix>.gene_counts.tsv``.
@@ -35,8 +36,8 @@ def write_gene_counts(
 
         # <total_reads_label>    <N>
         # filtered_reads <N>
-        gene    raw_count   <rpm|copies_per_kb>
-        ectA    12.5        3.21
+        gene    raw_count   <rpm|copies_per_kb>   [copies_per_genome]
+        ectA    12.5        3.21                  [0.42]
         ...
 
     total_reads_label:
@@ -44,6 +45,10 @@ def write_gene_counts(
         (the default, "total_reads"); ``annotate`` mode passes
         "total_proteins" since that count is Prodigal-called ORFs, not
         sequencing reads.
+    copies_per_genome:
+        ``profile`` mode with marker genes available (see normalise.py):
+        adds a final ``copies_per_genome`` column, ``NA`` where not
+        estimable. Omitted (None) leaves the file byte-identical to before.
 
     Returns the output path.
     """
@@ -58,13 +63,66 @@ def write_gene_counts(
     with open(out_path, "w") as fh:
         fh.write(f"# {total_reads_label}\t{total_reads}\n")
         fh.write(f"# filtered_reads\t{filtered_reads}\n")
-        fh.write(f"gene\traw_count\t{norm_col}\n")
+        extra_col = "\tcopies_per_genome" if copies_per_genome is not None else ""
+        fh.write(f"gene\traw_count\t{norm_col}{extra_col}\n")
         for fam in families:
             raw = counts.get(fam, 0.0)
             norm = normalised.get(fam, 0.0)
-            fh.write(f"{fam}\t{raw:.1f}\t{norm:.6g}\n")
+            extra = ""
+            if copies_per_genome is not None:
+                extra = "\t" + _fmt_optional(copies_per_genome.get(fam))
+            fh.write(f"{fam}\t{raw:.1f}\t{norm:.6g}{extra}\n")
 
     log.info("Wrote gene counts → %s", out_path)
+    return out_path
+
+
+def _fmt_optional(value: float | None) -> str:
+    return "NA" if value is None else f"{value:.6g}"
+
+
+# ---------------------------------------------------------------------------
+# markers.tsv (profile mode, copies-per-genome normalisation -- see normalise.py)
+# ---------------------------------------------------------------------------
+
+def write_marker_report(
+    out_prefix: str | Path,
+    counts: dict[str, float],
+    lengths_aa: dict[str, float],
+    rpk: dict[str, float | None],
+    estimate,  # normalise.MarkerEstimate
+    *,
+    read_length: int,
+) -> Path:
+    """
+    Write ``<out_prefix>.markers.tsv``: per-marker evidence behind the
+    genome-coverage estimate, so a copies_per_genome value can be audited.
+
+    Format::
+
+        # read_length         150
+        # genome_coverage_rpk 12.3     (NA if not estimable)
+        # markers_used        8
+        # note                ...      (only when there is one)
+        marker  raw_count  ref_length_aa  RPK  status
+        argS    40.5       575.2          23.1 used | outlier | undetected
+    """
+    out_path = Path(str(out_prefix) + ".markers.tsv")
+    status = {m: "used" for m in estimate.used}
+    status.update({m: "outlier" for m in estimate.outliers})
+    status.update({m: "undetected" for m in estimate.undetected})
+    with open(out_path, "w") as fh:
+        fh.write(f"# read_length\t{read_length}\n")
+        fh.write(f"# genome_coverage_rpk\t{_fmt_optional(estimate.coverage_rpk)}\n")
+        fh.write(f"# markers_used\t{len(estimate.used)}\n")
+        if estimate.note:
+            fh.write(f"# note\t{estimate.note}\n")
+        fh.write("marker\traw_count\tref_length_aa\tRPK\tstatus\n")
+        for m in sorted(counts):
+            length = lengths_aa.get(m)
+            fh.write(f"{m}\t{counts[m]:.1f}\t{'NA' if length is None else f'{length:.1f}'}\t"
+                     f"{_fmt_optional(rpk.get(m))}\t{status.get(m, 'undetected')}\n")
+    log.info("Wrote marker report → %s", out_path)
     return out_path
 
 
@@ -159,11 +217,14 @@ def build_aln_stats(
     evalue: float,
     min_subject_cover: float = 0.0,
     note_systems: str | None = None,
+    extra: dict | None = None,
 ) -> dict:
     """Return a flat dict of summary statistics for :func:`write_aln_stats`.
 
     note_systems: profile mode passes PROFILE_SYSTEMS_NOTE (Task 3); annotate
     mode leaves this None since it has its own systems.tsv output instead.
+    extra: additional key/value rows inserted before the per-family counts
+    (profile's marker-normalisation summary).
     """
     total_assigned = sum(counts.values())
     pct_assigned = (
@@ -183,6 +244,8 @@ def build_aln_stats(
     }
     if note_systems is not None:
         stats["note_systems"] = note_systems
+    if extra:
+        stats.update(extra)
     # per-family breakdown
     for fam, cnt in sorted(counts.items()):
         stats[f"count_{fam}"] = f"{cnt:.1f}"
