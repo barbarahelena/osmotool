@@ -149,9 +149,9 @@ def apply_cascade_check(
     best_hits:
         DIAMOND's best hit per read (from select_best_hits()).
     cascade_scores:
-        {read_id: {family: best_raw_hmm_bitscore}} from running hmmscan
+        {read_id: {family: best_raw_hmm_bitscore}} from running hmmsearch
         (use_cut_ga=False) on just the subset of reads whose DIAMOND
-        family needed checking, then grouping parse_hmmscan_output() rows
+        family needed checking, then grouping parse_hmmsearch_output() rows
         by read_id (via functions.strip_orf_suffix) and family.
     cutoffs:
         {family: short_read_bitscore_threshold} from
@@ -161,7 +161,7 @@ def apply_cascade_check(
     trusted as-is, no evidence it needs a second opinion). A read whose
     family IS in cutoffs but has no recorded HMM score at all against that
     family (i.e. absent from cascade_scores, or that family missing from
-    its per-family score dict) is treated as scoring 0 -- hmmscan found
+    its per-family score dict) is treated as scoring 0 -- hmmsearch found
     no signal at all for it, which should never pass a real threshold.
     """
     kept: dict[str, dict] = {}

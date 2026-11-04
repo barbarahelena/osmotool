@@ -136,3 +136,56 @@ class TestStripMateTag:
 
     def test_unchanged_for_unrelated_trailing_text(self):
         assert strip_mate_tag("frag_R12") == "frag_R12"
+
+
+# ---------------------------------------------------------------------------
+# hmmsearch tblout parsing
+# ---------------------------------------------------------------------------
+#
+# hmmsearch's tblout puts the *sequence* in column 0 and the *HMM* in
+# column 2 -- the reverse of hmmscan. A swap here would silently turn every
+# protein ID into a "family" and vice versa, so pin the orientation down.
+
+from osmotool.functions import count_hmm_models, parse_hmmsearch_output
+
+_HMMSEARCH_TBLOUT = """\
+#                                                               --- full sequence ---- --- best 1 domain ---- --- domain number estimation ----
+# target name        accession  query name           accession    E-value  score  bias   E-value  score  bias   exp reg clu  ov env dom rep inc description of target
+#------------------- ---------- -------------------- ---------- --------- ------ ----- --------- ------ -----   --- --- --- --- --- --- --- --- ---------------------
+NC_000913.3_890      -          opuCA                -              8e-50  160.9   0.1   1.1e-49  160.5   0.1   1.0   1   0   0   1   1   1   1 # 1 # 1200 # 1 # ID=1_890
+NC_000913.3_12       -          betL                 -            3.2e-07   25.4   2.0   4.1e-07   25.0   2.0   1.1   1   0   0   1   1   1   1 # 5 # 900 # -1 # ID=1_12
+#
+# Program:         hmmsearch
+"""
+
+
+class TestParseHmmsearchOutput:
+    def test_sequence_is_qseqid_and_hmm_is_sseqid(self, tmp_path):
+        tbl = tmp_path / "x.tblout"
+        tbl.write_text(_HMMSEARCH_TBLOUT)
+        rows = list(parse_hmmsearch_output(tbl))
+        assert rows == [
+            {"qseqid": "NC_000913.3_890", "sseqid": "opuCA", "evalue": 8e-50, "bitscore": 160.9},
+            {"qseqid": "NC_000913.3_12", "sseqid": "betL", "evalue": 3.2e-07, "bitscore": 25.4},
+        ]
+
+    def test_empty_tblout(self, tmp_path):
+        tbl = tmp_path / "x.tblout"
+        tbl.write_text("# only comments\n#\n")
+        assert list(parse_hmmsearch_output(tbl)) == []
+
+
+class TestCountHmmModels:
+    def test_counts_name_lines(self, tmp_path):
+        hmm = tmp_path / "db.hmm"
+        hmm.write_text(
+            "HMMER3/f [3.4 | Aug 2023]\nNAME  betL\nLENG  500\n//\n"
+            "HMMER3/f [3.4 | Aug 2023]\nNAME  opuCA\nLENG  380\n//\n"
+        )
+        assert count_hmm_models(hmm) == 2
+
+    def test_rejects_non_hmm_file(self, tmp_path):
+        bad = tmp_path / "db.hmm"
+        bad.write_text(">seq\nMKV\n")
+        with pytest.raises(ValueError):
+            count_hmm_models(bad)

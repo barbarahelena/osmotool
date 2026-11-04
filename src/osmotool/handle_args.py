@@ -161,14 +161,14 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
     cascade.add_argument(
         "--no_cascade", action="store_true", default=False,
         help="Disable the DIAMOND+HMM cascade (on by default). The cascade "
-             "gives reads a second opinion from hmmscan when their DIAMOND "
+             "gives reads a second opinion from hmmsearch when their DIAMOND "
              "call lands on a family with demonstrated precision problems "
              "(e.g. betL vs betT/CaiT, or several others as low as "
              "5-25%% DIAMOND-only precision -- see osmo_refdb's "
              "profile_cascade.tsv), using DATABASE's "
              "osmo_refdb.profile_cascade.tsv and hmms/osmo_refdb.hmm -- "
              "only that flagged subset pays the extra cost, not the whole "
-             "dataset. Requires orfm + hmmscan on PATH, and both files "
+             "dataset. Requires orfm + hmmsearch on PATH, and both files "
              "present in DATABASE; pass this flag to run DIAMOND-only if "
              "you don't have them.",
     )
@@ -241,7 +241,7 @@ def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--method", choices=["diamond", "hmm", "both"], default="hmm",
-        help="Detection method. 'hmm' (default) runs hmmscan --cut_ga "
+        help="Detection method. 'hmm' (default) runs hmmsearch --cut_ga "
              "against DATABASE's hmms/osmo_refdb.hmm using each family's "
              "calibrated gathering-threshold cutoff -- meaningful here "
              "(unlike in `profile`) because Prodigal-called ORFs are "
@@ -250,7 +250,7 @@ def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:
              "meaningfully more specific than DIAMOND for this reference "
              "database (fixed a false positive and an over-counted family "
              "DIAMOND got wrong). Requires hmms/osmo_refdb.hmm present in "
-             "DATABASE and hmmscan on PATH -- pass 'diamond' instead if "
+             "DATABASE and hmmsearch on PATH -- pass 'diamond' instead if "
              "you want to avoid the HMMER dependency, or 'both' to get "
              "DIAMOND's output alongside HMM's for comparison.",
     )

@@ -232,21 +232,47 @@ def run_diamond_blastp(
 
 
 # ---------------------------------------------------------------------------
-# hmmscan  (proteins → osmo_refdb HMM database) -- annotate mode only
+# hmmsearch  (osmo_refdb HMM database → proteins)
 # ---------------------------------------------------------------------------
 #
-# Deliberately NOT offered in `profile` mode: osmo_refdb's HMM GA cutoffs
+# --cut_ga is only applied in `annotate` mode: osmo_refdb's HMM GA cutoffs
 # are calibrated against full-length protein sequences, so applying them
-# (--cut_ga) to short translated read fragments would silently produce
-# zero hits for essentially every read (see osmo_refdb's
+# to short translated read fragments would silently produce zero hits for
+# essentially every read (see osmo_refdb's
 # pipeline/translate_and_hmmscan.sh for the same pitfall it works around
 # by sweeping raw bit scores instead). Prodigal-called ORFs in `annotate`
-# ARE full-length, so --cut_ga is exactly the right tool here: it gives
+# ARE full-length, so --cut_ga is exactly the right tool there: it gives
 # HMM a per-family specificity gate that DIAMOND's flat --min_identity
 # does not have, which matters for genuinely close paralogs within the
-# same Pfam family (e.g. betL vs betT/CaiT).
+# same Pfam family (e.g. betL vs betT/CaiT). `profile`'s cascade runs
+# without --cut_ga and applies its own short-read-calibrated threshold.
+#
+# hmmsearch rather than hmmscan: osmo_refdb is a few dozen models searched
+# against thousands (annotate) to millions (profile cascade) of
+# sequences. hmmscan re-reads the whole profile database for every query
+# sequence; hmmsearch loads each model once and streams the sequences,
+# which is ~5x faster on a single bacterial genome. Bit scores -- and so
+# --cut_ga and the cascade's bit-score thresholds -- are identical between
+# the two. E-values are not by default: hmmscan's search space Z is the
+# number of models, hmmsearch's is the number of sequences. run_hmmsearch
+# passes -Z/--domZ = number of models so E-values (used for best-hit
+# tie-breaking, and for HMMER's default E<=10 reporting threshold, which
+# decides whether weak raw-score cascade hits are reported at all) stay
+# exactly what hmmscan produced, independent of input size.
 
-def run_hmmscan(
+def count_hmm_models(hmm_db: str | Path) -> int:
+    """Number of profile HMMs in an HMMER3 .hmm file (one NAME line each)."""
+    n = 0
+    with open(hmm_db) as fh:
+        for line in fh:
+            if line.startswith("NAME "):
+                n += 1
+    if n == 0:
+        raise ValueError(f"No HMMs found in {hmm_db} -- not an HMMER3 .hmm file?")
+    return n
+
+
+def run_hmmsearch(
     hmm_db: str | Path,
     proteins: str | Path,
     out_file: str | Path,
@@ -255,8 +281,8 @@ def run_hmmscan(
     use_cut_ga: bool = True,
 ) -> Path:
     """
-    Run ``hmmscan`` on a protein FASTA against a pressed osmo_refdb HMM
-    database (the .hmm file + its .h3f/.h3i/.h3m/.h3p press indices).
+    Run ``hmmsearch`` with the osmo_refdb HMM database (the .hmm file; the
+    .h3* hmmpress indices are not needed) against a protein FASTA.
 
     use_cut_ga=True (default, used by `annotate`) applies each family's
     calibrated gathering-threshold cutoff, valid for full-length ORFs.
@@ -264,8 +290,11 @@ def run_hmmscan(
     bit scores instead -- short read fragments can never reach a cutoff
     calibrated against full-length sequences, so the cascade instead
     applies its own short-read-calibrated threshold (see
-    quantifier.apply_cascade_check) to whatever parse_hmmscan_output()
+    quantifier.apply_cascade_check) to whatever parse_hmmsearch_output()
     reports here.
+
+    -Z/--domZ are fixed to the number of models in *hmm_db* so E-values
+    match hmmscan's (see the comment block above).
 
     Returns the path to the tblout output file.
     """
@@ -275,9 +304,12 @@ def run_hmmscan(
     if not hmm_db.exists():
         raise FileNotFoundError(f"HMM database not found: {hmm_db}")
 
+    n_models = str(count_hmm_models(hmm_db))
     cmd = [
-        "hmmscan",
+        "hmmsearch",
         *(["--cut_ga"] if use_cut_ga else []),
+        "-Z", n_models,
+        "--domZ", n_models,
         "--tblout", str(out_file),
         "--noali",
         "--cpu", str(threads),
@@ -285,33 +317,35 @@ def run_hmmscan(
         str(proteins),
     ]
 
-    log.info("Running hmmscan → %s", out_file)
+    log.info("Running hmmsearch → %s", out_file)
     log.debug("Command: %s", " ".join(cmd))
 
     result = subprocess.run(cmd, stdout=subprocess.DEVNULL)
     if result.returncode != 0:
-        raise RuntimeError(f"hmmscan failed (exit {result.returncode})")
+        raise RuntimeError(f"hmmsearch failed (exit {result.returncode})")
 
     return out_file
 
 
-def parse_hmmscan_output(tblout_file: str | Path) -> Iterator[dict]:
+def parse_hmmsearch_output(tblout_file: str | Path) -> Iterator[dict]:
     """
-    Yield one dict per hit row from an hmmscan --tblout file, shaped to
+    Yield one dict per hit row from an hmmsearch --tblout file, shaped to
     match parse_diamond_output()'s row format (qseqid/sseqid/bitscore/
     evalue) so the same quantifier.select_best_hits()/count_hits()
     functions work unchanged for either method.
 
-    tblout columns (whitespace-delimited):
+    hmmsearch tblout columns (whitespace-delimited):
       target name  accession  query name  accession  E-value  score  bias  ...
-    osmo_refdb builds one HMM per family, named after the family itself
-    (e.g. "betL"), so "target name" is used directly as sseqid --
+    In hmmsearch the *target* is the protein sequence and the *query* is
+    the HMM (the reverse of hmmscan), so qseqid = column 0 and sseqid =
+    column 2. osmo_refdb builds one HMM per family, named after the family
+    itself (e.g. "betL"), so the HMM name is used directly as sseqid --
     gene_family_from_header() splits on '|' and a bare family name with
     no '|' passes through unchanged.
 
-    If hmmscan was run with --cut_ga (run_hmmscan's default), every row
-    here already passed that family's calibrated gathering threshold --
-    no further score filtering is needed. If run with use_cut_ga=False
+    If hmmsearch was run with --cut_ga (run_hmmsearch's default), every
+    row here already passed that family's calibrated gathering threshold
+    -- no further score filtering is needed. If run with use_cut_ga=False
     (profile mode's cascade), these are raw scores and the caller is
     responsible for applying its own threshold.
     """
@@ -323,8 +357,8 @@ def parse_hmmscan_output(tblout_file: str | Path) -> Iterator[dict]:
             if len(fields) < 6:
                 continue
             yield {
-                "qseqid":   fields[2],
-                "sseqid":   fields[0],
+                "qseqid":   fields[0],
+                "sseqid":   fields[2],
                 "evalue":   float(fields[4]),
                 "bitscore": float(fields[5]),
             }
