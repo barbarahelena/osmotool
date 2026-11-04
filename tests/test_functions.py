@@ -189,3 +189,29 @@ class TestCountHmmModels:
         bad.write_text(">seq\nMKV\n")
         with pytest.raises(ValueError):
             count_hmm_models(bad)
+
+
+# ---------------------------------------------------------------------------
+# strip_orf_suffix (orfm ORF ID → original read ID, used by the cascade)
+# ---------------------------------------------------------------------------
+
+from osmotool.functions import strip_orf_suffix
+
+
+class TestStripOrfSuffix:
+    @pytest.mark.parametrize("orf_id, read_id", [
+        # legacy /1 /2 mate markers
+        ("read42/1_1_2_3", "read42/1"),
+        ("read42/2_10_4_1", "read42/2"),
+        # no mate marker: single-end reads, and modern Illumina headers
+        # whose mate marker sits after the whitespace orfm drops
+        ("r215486_3_3_4", "r215486"),
+        ("A00123:8:H5:1:1101:1000:2000_1_1_4", "A00123:8:H5:1:1101:1000:2000"),
+        # underscores inside the read ID itself are preserved
+        ("SRR123_456.7_2_5_1", "SRR123_456.7"),
+    ])
+    def test_recovers_read_id(self, orf_id, read_id):
+        assert strip_orf_suffix(orf_id) == read_id
+
+    def test_non_orfm_id_passes_through(self):
+        assert strip_orf_suffix("not_an_orf") == "not_an_orf"

@@ -367,9 +367,15 @@ def parse_hmmsearch_output(tblout_file: str | Path) -> Iterator[dict]:
 # orfm's ORF headers are exactly "<original read ID>_<orf>_<frame>_<n>"
 # (same convention osmo_refdb's own 11_compute_metrics.py relies on and
 # has verified against real orfm output), so stripping the trailing three
-# underscore-separated numbers after the mate marker recovers the
-# original read ID an ORF was called from.
-ORF_SUFFIX_RE = re.compile(r"^(.*/[12])_\d+_\d+_\d+$")
+# underscore-separated numbers recovers the original read ID an ORF was
+# called from. The read ID may or may not carry a "/1"/"/2" mate marker:
+# single-end reads and modern Illumina headers (mate marker after the
+# first whitespace, which orfm drops) don't, so the marker must not be
+# required here -- otherwise no ORF maps back to its read and the cascade
+# silently drops every flagged-family read. The greedy (.*) strips exactly
+# the last three numeric fields, so read IDs that themselves contain
+# underscores are preserved.
+ORF_SUFFIX_RE = re.compile(r"^(.*)_\d+_\d+_\d+$")
 
 
 def strip_orf_suffix(orf_id: str) -> str:
