@@ -273,6 +273,7 @@ bacterial-like and could add marker hits.
 # n_contigs      1
 # contig_n50     4215606
 # filtered_reads 187
+# proteins_with_hits 187
 gene    raw_count   copies_per_kb
 ectA    1.0         5.87
 ectB    1.0         6.42
@@ -289,6 +290,14 @@ and GC can be used as covariates when comparing genomes without a separate step:
 
 They are computed from `ASSEMBLY.FASTA` even when `--proteins` is given. `profile`
 mode does not write them. Parsers should skip `#` lines they don't recognise.
+
+`proteins_with_hits` is the number of proteins with at least one hit that passed
+filtering (DIAMOND identity/coverage/per-family cutoffs, or the HMM gathering
+threshold), counted before each protein's best hit is chosen and before decoy
+families are dropped. It can therefore be slightly higher than the sum of
+`raw_count`. `filtered_reads` holds the same number; it is the name profile mode
+uses and is kept so existing parsers keep working. Prefer `proteins_with_hits` in
+new code.
 
 **copies_per_kb** = `(raw_count × 10⁹) / (gene_length_bp × total_proteins)`, using
 protein lengths from Prodigal.

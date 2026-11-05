@@ -30,6 +30,7 @@ def write_gene_counts(
     total_reads_label: str = "total_reads",
     copies_per_genome: dict[str, float | None] | None = None,
     assembly_stats: AssemblyStats | None = None,
+    proteins_with_hits: int | None = None,
 ) -> Path:
     """
     Write ``<out_prefix>.gene_counts.tsv``.
@@ -56,6 +57,11 @@ def write_gene_counts(
         the first one: ``# genome_bp``, ``# gc`` (5 decimals, or ``NA`` if
         the assembly has no A/C/G/T), ``# n_contigs`` and ``# contig_n50``.
         ``profile`` leaves this None, so its output is unchanged.
+    proteins_with_hits:
+        ``annotate`` mode only. When given, written as
+        ``# proteins_with_hits`` directly after ``# filtered_reads``. It is
+        the same number under a name that fits annotate; ``filtered_reads``
+        stays for parsers that already read it.
 
     Returns the output path.
     """
@@ -76,6 +82,8 @@ def write_gene_counts(
             fh.write(f"# n_contigs\t{assembly_stats.n_contigs}\n")
             fh.write(f"# contig_n50\t{assembly_stats.contig_n50}\n")
         fh.write(f"# filtered_reads\t{filtered_reads}\n")
+        if proteins_with_hits is not None:
+            fh.write(f"# proteins_with_hits\t{proteins_with_hits}\n")
         extra_col = "\tcopies_per_genome" if copies_per_genome is not None else ""
         fh.write(f"gene\traw_count\t{norm_col}{extra_col}\n")
         for fam in families:

@@ -204,6 +204,7 @@ class TestAnnotateGeneCountsHeader:
             "# n_contigs\t3",
             "# contig_n50\t18",
             "# filtered_reads\t3",
+            "# proteins_with_hits\t3",
         ]
 
     def test_gene_table_unchanged(self, tmp_path: Path):

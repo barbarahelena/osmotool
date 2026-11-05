@@ -646,6 +646,9 @@ def _finish_annotate_method(
     (systems_path/coords_path=None) when orf_coords is empty/None -- see
     run_annotate's docstring for why that happens and how it degrades
     gracefully."""
+    # Proteins with at least one hit that passed filtering, counted before
+    # best-hit selection and decoy exclusion. Written under its legacy
+    # "filtered_reads" name (shared with profile) and as proteins_with_hits.
     filtered_reads = len({row["qseqid"] for row in alignments})
     best_hits = select_best_hits(iter(alignments))
 
@@ -676,6 +679,7 @@ def _finish_annotate_method(
         normalisation="copies_per_kb",
         total_reads_label="total_proteins",
         assembly_stats=assembly_stats,
+        proteins_with_hits=filtered_reads,
     )
     stats = build_aln_stats(
         mode=f"annotate:{method_name}",

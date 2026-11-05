@@ -127,6 +127,16 @@ class TestWriteGeneCounts:
         comments = [l for l in out.read_text().splitlines() if l.startswith("#")]
         assert comments == ["# total_reads\t6", "# filtered_reads\t6"]
 
+    def test_proteins_with_hits_line(self, tmp_path: Path, sample_counts, sample_rpm):
+        common = dict(total_reads=4128, filtered_reads=187,
+                      normalisation="copies_per_kb", total_reads_label="total_proteins")
+        plain = write_gene_counts(str(tmp_path / "plain"), sample_counts, sample_rpm, **common)
+        out = write_gene_counts(str(tmp_path / "pwh"), sample_counts, sample_rpm, **common,
+                                proteins_with_hits=187)
+        lines = out.read_text().splitlines()
+        assert lines[1:3] == ["# filtered_reads\t187", "# proteins_with_hits\t187"]
+        assert lines[:2] + lines[3:] == plain.read_text().splitlines()
+
     def test_raw_count_values(self, tmp_path: Path, sample_counts, sample_rpm):
         prefix = str(tmp_path / "sample")
         out = write_gene_counts(
