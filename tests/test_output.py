@@ -16,6 +16,7 @@ from osmotool.output import (
     write_system_calls,
     PROFILE_SYSTEMS_NOTE,
 )
+from osmotool.functions import AssemblyStats
 from osmotool.systems import SystemCall
 
 
@@ -88,6 +89,43 @@ class TestWriteGeneCounts:
         lines = out.read_text().splitlines()
         assert lines[0] == "# total_proteins\t4128"
         assert lines[2] == "gene\traw_count\tCOPIES_PER_KB"
+
+    def test_assembly_stats_lines(self, tmp_path: Path, sample_counts, sample_rpm):
+        common = dict(total_reads=4128, filtered_reads=187,
+                      normalisation="copies_per_kb", total_reads_label="total_proteins")
+        plain = write_gene_counts(str(tmp_path / "plain"), sample_counts, sample_rpm, **common)
+        out = write_gene_counts(
+            str(tmp_path / "stats"), sample_counts, sample_rpm, **common,
+            assembly_stats=AssemblyStats(genome_bp=4641652, gc=0.507907098,
+                                         n_contigs=1, contig_n50=4641652),
+        )
+        lines = out.read_text().splitlines()
+        assert lines[:6] == [
+            "# total_proteins\t4128",
+            "# genome_bp\t4641652",
+            "# gc\t0.50791",
+            "# n_contigs\t1",
+            "# contig_n50\t4641652",
+            "# filtered_reads\t187",
+        ]
+        # everything except the four new lines is byte-identical
+        assert lines[:1] + lines[5:] == plain.read_text().splitlines()
+
+    def test_assembly_stats_gc_na(self, tmp_path: Path, sample_counts, sample_rpm):
+        out = write_gene_counts(
+            str(tmp_path / "s"), sample_counts, sample_rpm,
+            total_reads=1, filtered_reads=0,
+            assembly_stats=AssemblyStats(genome_bp=4, gc=None, n_contigs=1, contig_n50=4),
+        )
+        assert "# gc\tNA" in out.read_text().splitlines()
+
+    def test_no_assembly_stats_by_default(self, tmp_path: Path, sample_counts, sample_rpm):
+        out = write_gene_counts(
+            str(tmp_path / "s"), sample_counts, sample_rpm,
+            total_reads=6, filtered_reads=6,
+        )
+        comments = [l for l in out.read_text().splitlines() if l.startswith("#")]
+        assert comments == ["# total_reads\t6", "# filtered_reads\t6"]
 
     def test_raw_count_values(self, tmp_path: Path, sample_counts, sample_rpm):
         prefix = str(tmp_path / "sample")

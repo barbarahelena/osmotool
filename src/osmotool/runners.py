@@ -11,6 +11,8 @@ import logging
 from pathlib import Path
 
 from osmotool.functions import (
+    AssemblyStats,
+    compute_assembly_stats,
     run_diamond_blastx,
     run_diamond_blastp,
     run_hmmsearch,
@@ -508,6 +510,18 @@ def run_annotate(
 
     resolve_out_prefix(out_prefix)
 
+    # --- whole-assembly stats for the gene_counts.tsv header ---
+    # Read from the assembly even when --proteins skips Prodigal; ASSEMBLY
+    # is a required argument either way.
+    assembly_stats = compute_assembly_stats(assembly)
+    log.info(
+        "Assembly: %d bp, GC %s, %d contigs, N50 %d",
+        assembly_stats.genome_bp,
+        "NA" if assembly_stats.gc is None else f"{assembly_stats.gc:.5f}",
+        assembly_stats.n_contigs,
+        assembly_stats.contig_n50,
+    )
+
     # --- optional Prodigal step ---
     if proteins is None:
         log.info("Running Prodigal on assembly: %s", assembly)
@@ -566,6 +580,7 @@ def run_annotate(
             min_subject_cover=min_subject_cover, evalue=evalue,
             exclude_families=exclude_families,
             orf_coords=orf_coords, systems_def=systems_def,
+            assembly_stats=assembly_stats,
         )
         if not keep_aln:
             aln_file.unlink(missing_ok=True)
@@ -582,6 +597,7 @@ def run_annotate(
             min_identity=None, min_query_cover=None, min_subject_cover=None, evalue=None,
             exclude_families=exclude_families,
             orf_coords=orf_coords, systems_def=systems_def,
+            assembly_stats=assembly_stats,
         )
         if not keep_aln:
             hmm_aln_file.unlink(missing_ok=True)
@@ -616,6 +632,7 @@ def _finish_annotate_method(
     exclude_families: str | None = None,
     orf_coords: dict | None = None,
     systems_def: dict | None = None,
+    assembly_stats: AssemblyStats | None = None,
 ) -> tuple[Path, Path, Path | None, Path | None]:
     """Shared best-hit selection / counting / copies_per_kb / output-writing tail for
     one annotate method (diamond or hmm), factored out since both methods
@@ -658,6 +675,7 @@ def _finish_annotate_method(
         filtered_reads=filtered_reads,
         normalisation="copies_per_kb",
         total_reads_label="total_proteins",
+        assembly_stats=assembly_stats,
     )
     stats = build_aln_stats(
         mode=f"annotate:{method_name}",

@@ -495,6 +495,80 @@ def run_prodigal(
 
 
 # ---------------------------------------------------------------------------
+# Assembly statistics (annotate mode only)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class AssemblyStats:
+    """Whole-assembly summary written to annotate's gene_counts.tsv header.
+
+    genome_bp:  total characters in sequence lines (N and IUPAC codes included).
+    gc:         (G+C) / (A+C+G+T), case-insensitive; N and other IUPAC
+                ambiguity codes are excluded from both numerator and
+                denominator. None if the assembly has no A/C/G/T at all.
+    n_contigs:  number of FASTA records (empty records included).
+    contig_n50: N50 of record lengths; 0 for an empty assembly.
+    """
+    genome_bp: int
+    gc: float | None
+    n_contigs: int
+    contig_n50: int
+
+
+def compute_assembly_stats(assembly: str | Path) -> AssemblyStats:
+    """
+    Compute :class:`AssemblyStats` in one pass over a plain-text FASTA.
+
+    Reads in binary mode and counts bases with ``bytes.count`` per line, so
+    an ~8 Mb genome takes well under a second. Leading/trailing whitespace
+    (including CRLF line endings) is not counted as sequence.
+
+    Raises ValueError if sequence data appears before the first '>' header
+    (e.g. the file isn't FASTA, or is compressed).
+    """
+    lengths: list[int] = []
+    gc = acgt = 0
+    with open(assembly, "rb") as fh:
+        for raw in fh:
+            if raw.startswith(b">"):
+                lengths.append(0)
+                continue
+            line = raw.strip()
+            if not line:
+                continue
+            if not lengths:
+                raise ValueError(
+                    f"{assembly}: sequence data before the first '>' header "
+                    "-- expected an uncompressed FASTA file"
+                )
+            lengths[-1] += len(line)
+            line = line.upper()
+            n_gc = line.count(b"G") + line.count(b"C")
+            gc += n_gc
+            acgt += n_gc + line.count(b"A") + line.count(b"T")
+
+    return AssemblyStats(
+        genome_bp=sum(lengths),
+        gc=(gc / acgt) if acgt else None,
+        n_contigs=len(lengths),
+        contig_n50=_n50(lengths),
+    )
+
+
+def _n50(lengths: list[int]) -> int:
+    """Length L such that records of length >= L cover at least half the total."""
+    total = sum(lengths)
+    if total == 0:
+        return 0
+    running = 0
+    for length in sorted(lengths, reverse=True):
+        running += length
+        if 2 * running >= total:
+            return length
+    return 0  # unreachable: running reaches total
+
+
+# ---------------------------------------------------------------------------
 # Alignment file parsing
 # ---------------------------------------------------------------------------
 

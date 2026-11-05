@@ -268,11 +268,27 @@ bacterial-like and could add marker hits.
 
 ```
 # total_proteins 4128
+# genome_bp      4215606
+# gc             0.43514
+# n_contigs      1
+# contig_n50     4215606
 # filtered_reads 187
 gene    raw_count   copies_per_kb
 ectA    1.0         5.87
 ectB    1.0         6.42
 ```
+
+The four lines after `total_proteins` describe the input assembly, so genome size
+and GC can be used as covariates when comparing genomes without a separate step:
+
+- `genome_bp`: total assembly length (every character in sequence lines, `N`s included)
+- `gc`: (G+C) / (A+C+G+T), five decimals; `N` and other IUPAC ambiguity codes are
+  left out of both numerator and denominator (`NA` if the assembly has no A/C/G/T)
+- `n_contigs`: number of FASTA records
+- `contig_n50`: N50 of record lengths
+
+They are computed from `ASSEMBLY.FASTA` even when `--proteins` is given. `profile`
+mode does not write them. Parsers should skip `#` lines they don't recognise.
 
 **copies_per_kb** = `(raw_count × 10⁹) / (gene_length_bp × total_proteins)`, using
 protein lengths from Prodigal.
