@@ -184,6 +184,7 @@ def count_hits(
     best_hits: dict[str, dict],
     *,
     paired: bool = False,
+    known_families: Iterable[str] = KNOWN_FAMILIES,
 ) -> dict[str, float]:
     """
     Aggregate best hits into per-gene-family raw counts.
@@ -194,6 +195,10 @@ def count_hits(
         Mapping of qseqid → alignment row (from :func:`select_best_hits`).
     paired:
         If True each read contributes 0.5 (one read-pair = one fragment).
+    known_families:
+        Families pre-populated with 0 so they appear even without hits.
+        Defaults to the osmo panel; profile's marker pass passes the marker
+        names instead (see normalise.py).
 
     Returns
     -------
@@ -204,7 +209,7 @@ def count_hits(
     counts: dict[str, float] = defaultdict(float)
 
     # Pre-populate so all families appear in output
-    for fam in KNOWN_FAMILIES:
+    for fam in known_families:
         counts[fam] = 0.0
 
     for row in best_hits.values():

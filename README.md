@@ -200,6 +200,7 @@ osmotool annotate \
 |---|---|
 | `<prefix>.gene_counts.tsv` | Per-gene raw counts and normalised value (`rpm` or `copies_per_kb`, depending on mode) |
 | `<prefix>.aln_stats.tsv` | Summary statistics |
+| `<prefix>.markers.tsv` | `profile` only, when DATABASE ships `markers/` — per-marker evidence behind `copies_per_genome` (see [Copies per genome](#copies-per-genome-profile-mode) below) |
 | `<prefix>.systems.tsv` | `annotate` only — multi-subunit system calls (see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only) below) |
 | `<prefix>.gene_coordinates.tsv` | `annotate` only — per-gene contig/start/end/strand coordinates (see [`gene_coordinates.tsv` format](#gene_coordinatestsv-format-annotate-mode-only) below) |
 
@@ -219,6 +220,49 @@ UniRef90_A0A001    4.0    1.05
 length is available and no per-length correction is applied. This is a real
 sequencing-depth-normalised abundance estimate: it corrects for how many reads a
 sample happened to be sequenced to.
+
+### Copies per genome (`profile` mode)
+
+RPM still depends on what else is in the sample: host DNA, eukaryotes, viruses
+and the community's average genome size all shift it. When the release
+directory contains a `markers/` subdirectory (osmo_refdb's `run_pipeline.sh
+markers`), `profile` adds a `copies_per_genome` column:
+
+```
+gene    raw_count   RPM       copies_per_genome
+betA    310.5       31.05     0.412
+ectC    12.0        1.2       0.087
+```
+
+**copies_per_genome** = family reads per kb of effective gene length ÷ mean
+reads per kb of ten universal single-copy marker genes (the fetchMG/mOTUs COGs:
+ychF, pheS, argS, serS, cysS, leuS, valS, tsaD, ffh, ftsY) — the average number
+of copies per genome in the community (for an at-most-single-copy family, the
+fraction of cells carrying it). Following MicrobeCensus (Nayfach & Pollard 2015):
+
+- Markers are searched in a **second, separate DIAMOND pass** with the same
+  `--min_identity`/`--min_query_cover`/`--evalue` thresholds, so they never
+  compete with osmo families for best hits.
+- Gene length is the hit-weighted mean length of the reference proteins reads
+  aligned to, converted to an **effective length** `3·L_aa − (2c − 1)·R + 1`
+  (R = median read length, c = `--min_query_cover`): the number of read
+  positions that can produce a qualifying hit. Without it short families
+  (cspA, ~70 aa) would be underestimated ~1.7× against long markers at 150 bp.
+- Markers with zero reads, and markers ≥ 1 scaled MAD from the median (e.g. one
+  duplicated in a dominant lineage), are excluded before averaging. Fewer than 5
+  detected markers → `NA`.
+
+`<prefix>.markers.tsv` lists each marker's count, reference length, RPK and
+whether it was used, excluded as an outlier, or undetected;
+`aln_stats.tsv` gains the summary (`genome_coverage_rpk`, `markers_used`, ...).
+Releases without `markers/` produce exactly the old output; `--no_markers`
+skips the extra pass.
+
+Limits: per-family detection sensitivity isn't corrected for (both sides use
+the same thresholds, so it partly cancels) — compare `copies_per_genome`
+across samples rather than reading it as an exact copy number. Run on
+host-depleted reads: host mitochondrial aminoacyl-tRNA synthetases are
+bacterial-like and could add marker hits.
 
 `annotate` mode:
 
@@ -451,6 +495,7 @@ assembly+binning step) on the same samples.
 | `--total_reads` | *(counted)* | Skip read counting when count is already known |
 | `--method` | `hmm` (annotate only) | `diamond`, `hmm`, or `both`. `profile` is DIAMOND-only (HMM's GA cutoffs don't apply to short read fragments); `annotate` defaults to HMM since it's meaningfully more specific on full-length ORFs. Requires `hmms/osmo_refdb.hmm` present in `DATABASE` for `hmm`/`both` |
 | `--no_cascade` | off (cascade on by default) | `profile` only. Disables the DIAMOND+HMM cascade, which by default gives reads whose DIAMOND call lands on a family with demonstrated precision problems (several as low as 5-25% DIAMOND-only precision) a second opinion from `hmmsearch`, using `DATABASE`'s `osmo_refdb.profile_cascade.tsv` + `hmms/osmo_refdb.hmm`. The cascade requires `orfm`+`hmmsearch` on PATH and both files present in `DATABASE`; pass this flag to run DIAMOND-only if you don't have them |
+| `--no_markers` | off (on whenever `DATABASE` has `markers/`) | `profile` only. Skips the marker-gene DIAMOND pass and the `copies_per_genome` column / `markers.tsv` (see [Copies per genome](#copies-per-genome-profile-mode)) |
 | `--proteins` | none | `annotate` only. Pre-called protein FASTA (skip Prodigal) |
 | `--keep_aln` / `--keep_proteins` | off | Retain intermediate alignment/protein files instead of deleting them after the run |
 | `--skip_systems` | off | `annotate` only. Skip the [multi-subunit systems](#multi-subunit-systems-annotate-mode-only) layer entirely — no `<prefix>.systems.tsv`, no `<prefix>.gene_coordinates.tsv`, no ORF-coordinate parsing |

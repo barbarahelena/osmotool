@@ -38,12 +38,20 @@ from osmotool.quantifier import (
     apply_cascade_check,
     extract_gene_coordinates,
 )
+from osmotool.normalise import (
+    median_read_length,
+    reference_lengths,
+    load_marker_names,
+    compute_rpk,
+    estimate_genome_coverage,
+    copies_per_genome,
+)
 from osmotool.output import (
     write_gene_counts, write_aln_stats, build_aln_stats, write_system_calls,
-    write_gene_coordinates, PROFILE_SYSTEMS_NOTE,
+    write_gene_coordinates, write_marker_report, PROFILE_SYSTEMS_NOTE,
 )
 from osmotool.systems import detect_systems, DEFAULT_SYSTEMS, load_systems_config
-from osmotool.utils import resolve_out_prefix, check_tool
+from osmotool.utils import resolve_out_prefix, check_tool, MarkerDb
 
 log = logging.getLogger("osmotool")
 
@@ -71,12 +79,23 @@ def run_profile(
     hmm_db: str | None = None,
     cascade_config: str | None = None,
     exclude_families: str | None = None,
+    markers: MarkerDb | None = None,
+    train_refs: str | None = None,
 ) -> tuple[Path, Path]:
     """
     Profile FASTQ reads against the osmodiamond database.
 
     Parameters
     ----------
+    markers, train_refs:
+        Copies-per-genome normalisation (see normalise.py). *markers* is the
+        release's markers/ subdirectory (universal single-copy genes, searched
+        in a second, separate DIAMOND pass with the same thresholds);
+        *train_refs* is osmo_refdb.train_refs.faa, for osmo reference
+        lengths. Both required together; adds a copies_per_genome column to
+        gene_counts.tsv and writes <out_prefix>.markers.tsv. None (the
+        library default) skips it; the CLI enables it whenever DATABASE
+        ships markers/, unless --no_markers.
     tmpdir:
         Directory for temporary files (merged paired-end FASTQ).
         Defaults to ``$TMPDIR`` (node-local scratch on HPC).
@@ -120,6 +139,8 @@ def run_profile(
     same samples. See this project's README for the same note.
     """
     check_tool("diamond")
+    if markers is not None and train_refs is None:
+        raise ValueError("train_refs is required when markers is given")
     if cascade_config is not None:
         if hmm_db is None:
             raise ValueError("hmm_db is required when cascade_config is given")
@@ -170,12 +191,25 @@ def run_profile(
         counts = {fam: cnt for fam, cnt in counts.items() if fam not in excluded}
     rpm = compute_rpm(counts, total_reads)
 
+    # --- copies per genome, via universal single-copy markers ---
+    copies, marker_stats = None, None
+    if markers is not None:
+        copies, marker_stats = _normalise_to_markers(
+            markers, train_refs, best_hits, counts,
+            reads1=reads1, reads2=reads2, singles=singles, paired=paired,
+            out_prefix=out_prefix, keep_aln=keep_aln,
+            min_identity=min_identity, min_query_cover=min_query_cover,
+            min_subject_cover=min_subject_cover, min_seqlen=min_seqlen,
+            evalue=evalue, threads=threads, tmpdir=tmpdir,
+        )
+
     # --- write outputs ---
     counts_path = write_gene_counts(
         out_prefix, counts, rpm,
         total_reads=total_reads,
         filtered_reads=filtered_reads,
         normalisation="rpm",
+        copies_per_genome=copies,
     )
     stats = build_aln_stats(
         mode="profile",
@@ -188,6 +222,7 @@ def run_profile(
         min_subject_cover=min_subject_cover,
         evalue=evalue,
         note_systems=PROFILE_SYSTEMS_NOTE,
+        extra=marker_stats,
     )
     stats_path = write_aln_stats(out_prefix, stats)
 
@@ -198,6 +233,89 @@ def run_profile(
 
     log.info("profile complete: %s  %s", counts_path, stats_path)
     return counts_path, stats_path
+
+
+def _normalise_to_markers(
+    markers: MarkerDb,
+    train_refs: str,
+    best_hits: dict[str, dict],
+    counts: dict[str, float],
+    *,
+    reads1: str | None,
+    reads2: str | None,
+    singles: str | None,
+    paired: bool,
+    out_prefix: str,
+    keep_aln: bool,
+    min_identity: float,
+    min_query_cover: float,
+    min_subject_cover: float,
+    min_seqlen: int,
+    evalue: float,
+    threads: int,
+    tmpdir: str | None,
+) -> tuple[dict[str, float | None], dict]:
+    """Second DIAMOND pass against the marker db and the copies-per-genome
+    computation (see normalise.py). Markers get exactly the same alignment
+    thresholds and best-hit/paired counting as the osmo families, so
+    detection-sensitivity differences between them are as small as this
+    phase-1 method can make them. Returns (copies_per_genome, aln_stats rows)."""
+    read_length = median_read_length([reads1, singles])
+    log.info("Marker normalisation: median read length %d bp", read_length)
+
+    marker_aln = Path(str(out_prefix) + ".markers.blastx.tsv")
+    run_diamond_blastx(
+        markers.dmnd, marker_aln,
+        reads1=reads1, reads2=reads2, singles=singles,
+        min_identity=min_identity, min_query_cover=min_query_cover,
+        min_seqlen=min_seqlen, evalue=evalue, threads=threads, tmpdir=tmpdir,
+    )
+    marker_hits = select_best_hits(parse_diamond_output(marker_aln, min_subject_cover=min_subject_cover))
+
+    names = load_marker_names(markers.manifest)
+    decoys = load_excluded_families(markers.exclude_families) if markers.exclude_families else set()
+    raw = count_hits(marker_hits, paired=paired, known_families=names)
+    # Only real markers count: decoy hits (and any unexpected label) are
+    # dropped here, after best-hit selection has already let them win reads
+    # away from the markers they mimic.
+    unexpected = sorted(set(raw) - set(names) - decoys)
+    if unexpected:
+        log.warning("Marker db has labels not in its manifest, ignored: %s", ", ".join(unexpected))
+    marker_counts = {m: raw.get(m, 0.0) for m in names}
+
+    marker_len = reference_lengths(marker_hits, parse_protein_lengths(markers.refs))
+    marker_rpk = compute_rpk(marker_counts, marker_len, read_length, min_query_cover)
+    estimate = estimate_genome_coverage(marker_rpk, marker_counts)
+    if estimate.note:
+        log.warning("Marker normalisation: %s", estimate.note)
+    if estimate.outliers:
+        log.info("Marker normalisation: outlier markers excluded: %s", ", ".join(estimate.outliers))
+
+    osmo_len = reference_lengths(best_hits, parse_protein_lengths(train_refs))
+    osmo_rpk = compute_rpk(counts, osmo_len, read_length, min_query_cover)
+    copies = copies_per_genome(osmo_rpk, estimate.coverage_rpk)
+
+    write_marker_report(out_prefix, marker_counts, marker_len, marker_rpk, estimate,
+                        read_length=read_length)
+
+    if not keep_aln:
+        marker_aln.unlink(missing_ok=True)
+    else:
+        log.info("Marker alignment file retained: %s", marker_aln)
+
+    cov = estimate.coverage_rpk
+    stats = {
+        "marker_db":            str(markers.dmnd),
+        "read_length":          read_length,
+        "marker_fragments":     f"{estimate.total_fragments:.1f}",
+        "genome_coverage_rpk":  "NA" if cov is None else f"{cov:.6g}",
+        "markers_used":         ",".join(estimate.used) or "none",
+        "markers_outliers":     ",".join(estimate.outliers) or "none",
+        "markers_undetected":   ",".join(estimate.undetected) or "none",
+    }
+    if estimate.note:
+        stats["note_markers"] = estimate.note
+    return copies, stats
 
 
 def _apply_profile_cascade(
