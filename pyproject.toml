@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Screen osmoadaptation genes in metagenomic datasets using DIAMOND"
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
     "pandas>=1.5",
 ]
