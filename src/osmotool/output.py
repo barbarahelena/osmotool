@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from osmotool.functions import AssemblyStats
     from osmotool.systems import SystemCall
 
 log = logging.getLogger("osmotool")
@@ -28,6 +29,8 @@ def write_gene_counts(
     normalisation: str = "rpm",  # "rpm" or "copies_per_kb"
     total_reads_label: str = "total_reads",
     copies_per_genome: dict[str, float | None] | None = None,
+    assembly_stats: AssemblyStats | None = None,
+    proteins_with_hits: int | None = None,
 ) -> Path:
     """
     Write ``<out_prefix>.gene_counts.tsv``.
@@ -49,6 +52,16 @@ def write_gene_counts(
         ``profile`` mode with marker genes available (see normalise.py):
         adds a final ``copies_per_genome`` column, ``NA`` where not
         estimable. Omitted (None) leaves the file byte-identical to before.
+    assembly_stats:
+        ``annotate`` mode only. When given, four more comment lines follow
+        the first one: ``# genome_bp``, ``# gc`` (5 decimals, or ``NA`` if
+        the assembly has no A/C/G/T), ``# n_contigs`` and ``# contig_n50``.
+        ``profile`` leaves this None, so its output is unchanged.
+    proteins_with_hits:
+        ``annotate`` mode only. When given, written as
+        ``# proteins_with_hits`` directly after ``# filtered_reads``. It is
+        the same number under a name that fits annotate; ``filtered_reads``
+        stays for parsers that already read it.
 
     Returns the output path.
     """
@@ -62,7 +75,15 @@ def write_gene_counts(
 
     with open(out_path, "w") as fh:
         fh.write(f"# {total_reads_label}\t{total_reads}\n")
+        if assembly_stats is not None:
+            gc = "NA" if assembly_stats.gc is None else f"{assembly_stats.gc:.5f}"
+            fh.write(f"# genome_bp\t{assembly_stats.genome_bp}\n")
+            fh.write(f"# gc\t{gc}\n")
+            fh.write(f"# n_contigs\t{assembly_stats.n_contigs}\n")
+            fh.write(f"# contig_n50\t{assembly_stats.contig_n50}\n")
         fh.write(f"# filtered_reads\t{filtered_reads}\n")
+        if proteins_with_hits is not None:
+            fh.write(f"# proteins_with_hits\t{proteins_with_hits}\n")
         extra_col = "\tcopies_per_genome" if copies_per_genome is not None else ""
         fh.write(f"gene\traw_count\t{norm_col}{extra_col}\n")
         for fam in families:
