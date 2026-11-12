@@ -97,12 +97,74 @@ class TestVerifyChecksum:
 
 
 # ---------------------------------------------------------------------------
+# _download_file: resume after an early close (urlopen mocked)
+# ---------------------------------------------------------------------------
+
+class _FakeResponse(io.BytesIO):
+    def __init__(self, body: bytes, status: int, content_length: int):
+        super().__init__(body)
+        self.status = status
+        self.headers = {"Content-Length": str(content_length)}
+
+
+def _fake_server(payload: bytes, cut_at: list[int], honour_range: bool = True):
+    """urlopen stand-in serving *payload*; the n-th request's connection
+    closes after cut_at[n] bytes of its body (if given)."""
+    calls: list[str | None] = []
+
+    def urlopen(req, timeout=None):
+        rng = req.get_header("Range")
+        calls.append(rng)
+        start = int(rng.split("=")[1].rstrip("-")) if (rng and honour_range) else 0
+        body = payload[start:]
+        n = len(calls) - 1
+        if n < len(cut_at):
+            body = body[:cut_at[n]]
+        status = 206 if (rng and honour_range) else 200
+        return _FakeResponse(body, status, len(payload) - start)
+
+    return urlopen, calls
+
+
+class TestDownloadFile:
+    PAYLOAD = bytes(range(256)) * 40  # 10240 bytes
+
+    def test_resumes_after_early_close(self, tmp_path: Path):
+        from osmotool.download import _download_file
+        urlopen, calls = _fake_server(self.PAYLOAD, cut_at=[3000, 2000])
+        dest = tmp_path / "a.tar.gz"
+        with mock.patch("urllib.request.urlopen", side_effect=urlopen):
+            _download_file("http://fake/a", dest)
+        assert dest.read_bytes() == self.PAYLOAD
+        assert calls == [None, "bytes=3000-", "bytes=5000-"]
+
+    def test_restarts_when_range_ignored(self, tmp_path: Path):
+        from osmotool.download import _download_file
+        urlopen, calls = _fake_server(self.PAYLOAD, cut_at=[3000], honour_range=False)
+        dest = tmp_path / "a.tar.gz"
+        with mock.patch("urllib.request.urlopen", side_effect=urlopen):
+            _download_file("http://fake/a", dest)
+        assert dest.read_bytes() == self.PAYLOAD
+        assert len(calls) == 2
+
+    def test_gives_up_after_repeated_early_closes(self, tmp_path: Path):
+        from osmotool.download import _download_file, DOWNLOAD_ATTEMPTS
+        urlopen, _ = _fake_server(self.PAYLOAD, cut_at=[100] * DOWNLOAD_ATTEMPTS)
+        dest = tmp_path / "a.tar.gz"
+        with mock.patch("urllib.request.urlopen", side_effect=urlopen):
+            with pytest.raises(RuntimeError, match="kept closing early"):
+                _download_file("http://fake/a", dest)
+        assert not dest.exists()
+
+
+# ---------------------------------------------------------------------------
 # download_refdb (network mocked)
 # ---------------------------------------------------------------------------
 
 def _make_fake_archive(path: Path, release: str = "v5", content: bytes = b"fake dmnd") -> str:
     """Write a tarball at *path* containing <release>/osmo_refdb.dmnd and
-    return its md5 checksum."""
+    return its md5 checksum. *release* is the archive's top-level directory
+    name (``osmo_refdb_v9`` for v9's layout)."""
     with tarfile.open(path, "w:gz") as tar:
         info = tarfile.TarInfo(name=f"{release}/osmo_refdb.dmnd")
         info.size = len(content)
@@ -196,6 +258,73 @@ class TestDownloadRefdb:
              mock.patch("osmotool.download._download_file", side_effect=fake_download):
             with pytest.raises(RuntimeError, match="Checksum mismatch"):
                 download_refdb("v5", location)
+
+    def _v9_metadata(self, md5: str) -> dict:
+        # v9's Zenodo record: archive named osmo_refdb_v9.tar.gz, listed
+        # after a .sha256 sidecar that must not be picked.
+        return {"files": [
+            {"key": "osmo_refdb_v9.tar.gz.sha256", "checksum": "md5:x",
+             "links": {"self": "http://fake/osmo_refdb_v9.tar.gz.sha256"}},
+            {"key": "osmo_refdb_v9.tar.gz", "checksum": f"md5:{md5}",
+             "links": {"self": "http://fake/osmo_refdb_v9.tar.gz"}},
+        ]}
+
+    def test_archive_root_renamed_to_release(self, tmp_path: Path):
+        archive_src = tmp_path / "src.tar.gz"
+        md5 = _make_fake_archive(archive_src, release="osmo_refdb_v9")
+        location = tmp_path / "out"
+
+        def fake_download(url, dest):
+            dest.write_bytes(archive_src.read_bytes())
+
+        with mock.patch("osmotool.download._fetch_record_metadata",
+                        return_value=self._v9_metadata(md5)), \
+             mock.patch("osmotool.download._download_file", side_effect=fake_download):
+            out_dir = download_refdb("v9", location)
+
+        assert out_dir == location / "v9"
+        assert (out_dir / "osmo_refdb.dmnd").exists()
+        assert not (location / "osmo_refdb_v9").exists()
+        assert not (location / "osmo_refdb_v9.tar.gz").exists()
+
+    def test_force_with_renamed_root_replaces_existing(self, tmp_path: Path):
+        archive_src = tmp_path / "src.tar.gz"
+        md5 = _make_fake_archive(archive_src, release="osmo_refdb_v9", content=b"new content")
+        location = tmp_path / "out"
+        existing = location / "v9"
+        existing.mkdir(parents=True)
+        (existing / "stale.txt").write_text("old")
+
+        def fake_download(url, dest):
+            dest.write_bytes(archive_src.read_bytes())
+
+        with mock.patch("osmotool.download._fetch_record_metadata",
+                        return_value=self._v9_metadata(md5)), \
+             mock.patch("osmotool.download._download_file", side_effect=fake_download):
+            download_refdb("v9", location, force=True)
+
+        assert (existing / "osmo_refdb.dmnd").read_bytes() == b"new content"
+        assert not (existing / "stale.txt").exists()
+
+    def test_multiple_top_level_entries_raise(self, tmp_path: Path):
+        archive_src = tmp_path / "src.tar.gz"
+        with tarfile.open(archive_src, "w:gz") as tar:
+            for name in ("a/osmo_refdb.dmnd", "b/osmo_refdb.dmnd"):
+                info = tarfile.TarInfo(name=name)
+                info.size = 1
+                tar.addfile(info, io.BytesIO(b"x"))
+        md5 = hashlib.md5(archive_src.read_bytes()).hexdigest()
+        metadata = {"files": [
+            {"key": "v5.tar.gz", "checksum": f"md5:{md5}", "links": {"self": "http://fake/v5.tar.gz"}}
+        ]}
+
+        def fake_download(url, dest):
+            dest.write_bytes(archive_src.read_bytes())
+
+        with mock.patch("osmotool.download._fetch_record_metadata", return_value=metadata), \
+             mock.patch("osmotool.download._download_file", side_effect=fake_download):
+            with pytest.raises(RuntimeError, match="single top-level directory"):
+                download_refdb("v5", tmp_path / "out")
 
     def test_unknown_release_raises_before_any_network_call(self, tmp_path: Path):
         with mock.patch("osmotool.download._fetch_record_metadata") as fetch_mock:

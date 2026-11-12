@@ -47,11 +47,12 @@ log = logging.getLogger("osmotool")
 # via count_hits()'s defaultdict. Keep in sync with osmo_refdb's
 # families.yaml when adding a new gene family (that's the actual source
 # of truth for what the reference database contains). Current as of
-# osmo_refdb v7 (43 families -- one hmms/*.hmm per family, plus
+# osmo_refdb v9 (44 families -- one hmms/*.hmm per family, plus
 # mrpA_mrpB_fused, a distinctly-reportable DIAMOND-only family label for
 # the confirmed mrpA/mrpB fused-ORF variant with no equivalent fused HMM
-# profile). Deliberately excludes decoy families (e.g. betL_decoy) -- those
-# must never appear as a reported row (see osmo_refdb.annotate_excluded_families.txt).
+# profile). Deliberately excludes decoy families (betL_decoy, and v9's HMM
+# decoy pepABC_decoy) -- those must never appear as a reported row (see
+# osmo_refdb.annotate_excluded_families.txt).
 KNOWN_FAMILIES = (
     "betA", "betB", "betL",
     "cspA",
@@ -70,6 +71,7 @@ KNOWN_FAMILIES = (
     "opuCA", "opuCB", "opuCC",
     "otsA", "otsB",
     "proP", "proX",
+    "teaA",
     "trkA", "trkH",
 )
 
