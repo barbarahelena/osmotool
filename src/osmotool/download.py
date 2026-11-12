@@ -27,8 +27,9 @@ RELEASES: dict[str, str] = {
     "v5": "21420253",
     "v7": "21600046",
     "v8": "21691253",
+    "v9": "24154957",
 }
-LATEST_RELEASE = "v8"
+LATEST_RELEASE = "v9"
 
 
 def _resolve_release(release: str) -> str:
@@ -72,14 +73,46 @@ def _download_url_for(file_info: dict, record_id: str) -> str:
     return f"https://zenodo.org/records/{record_id}/files/{file_info['key']}?download=1"
 
 
+DOWNLOAD_ATTEMPTS = 5
+
+
 def _download_file(url: str, dest: Path) -> None:
+    """Download *url* to *dest*, resuming with HTTP Range requests when the
+    connection closes early. Zenodo sometimes drops a large transfer a few
+    hundred KB short, and http.client returns the short body without
+    raising, so the byte count is checked against Content-Length here."""
     log.info("Downloading %s -> %s", url, dest)
+    expected: int | None = None
+    written = 0
     try:
-        with urllib.request.urlopen(url, timeout=30) as resp, open(dest, "wb") as fh:
-            shutil.copyfileobj(resp, fh)
+        with open(dest, "wb") as fh:
+            for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+                headers = {"Range": f"bytes={written}-"} if written else {}
+                req = urllib.request.Request(url, headers=headers)
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    if written and resp.status != 206:
+                        # Server ignored the Range header: start over.
+                        fh.seek(0)
+                        fh.truncate()
+                        written = 0
+                    if expected is None or not written:
+                        length = resp.headers.get("Content-Length")
+                        expected = int(length) if length is not None else None
+                    while chunk := resp.read(1 << 20):
+                        fh.write(chunk)
+                        written += len(chunk)
+                if expected is None or written >= expected:
+                    return
+                log.warning("Download stopped at %d of %d bytes (attempt %d/%d); resuming",
+                            written, expected, attempt, DOWNLOAD_ATTEMPTS)
     except OSError as exc:
         dest.unlink(missing_ok=True)
         raise RuntimeError(f"Download failed ({url}): {exc}") from exc
+    dest.unlink(missing_ok=True)
+    raise RuntimeError(
+        f"Download failed ({url}): connection kept closing early, got "
+        f"{written} of {expected} bytes after {DOWNLOAD_ATTEMPTS} attempts."
+    )
 
 
 def _verify_checksum(path: Path, checksum: str | None) -> None:
@@ -118,6 +151,23 @@ def _safe_extractall(tar: tarfile.TarFile, dest: Path) -> None:
     tar.extractall(dest_resolved)
 
 
+def _archive_root(tar: tarfile.TarFile) -> str:
+    """Name of the single top-level directory every member of *tar* sits
+    under. Releases up to v8 unpack to ``<release>/`` (``v8/``); v9 unpacks
+    to ``osmo_refdb_v9/``, so the caller renames whatever this returns."""
+    roots = set()
+    for member in tar.getmembers():
+        parts = [p for p in Path(member.name).parts if p not in (".", "")]
+        if parts:
+            roots.add(parts[0])
+    if len(roots) != 1:
+        raise RuntimeError(
+            f"Expected the archive to contain a single top-level directory, "
+            f"found {sorted(roots)} -- osmo_refdb's tarball layout may have changed."
+        )
+    return roots.pop()
+
+
 def download_refdb(
     release: str,
     location: str | Path,
@@ -135,8 +185,9 @@ def download_refdb(
     location:
         Directory to download/extract into. Created if it doesn't exist.
         The release unpacks into a subdirectory named after the release
-        (e.g. ``<location>/v5/``), matching osmo_refdb's tarball layout --
-        pass that path as osmotool's DATABASE argument.
+        (e.g. ``<location>/v5/``) whatever the archive's own top-level
+        directory is called (v9's is ``osmo_refdb_v9/``) -- pass that path
+        as osmotool's DATABASE argument.
     force:
         Re-download and overwrite even if ``<location>/<release>`` already
         exists.
@@ -170,7 +221,16 @@ def download_refdb(
 
     log.info("Extracting %s -> %s", archive_path, location)
     with tarfile.open(archive_path) as tar:
+        root = _archive_root(tar)
         _safe_extractall(tar, location)
+
+    # Normalise the archive's top-level directory (e.g. osmo_refdb_v9/) to
+    # <location>/<release>/ so DATABASE paths look the same for every release.
+    extracted = location / root
+    if extracted != out_dir and extracted.is_dir():
+        if out_dir.exists():  # only reachable with --force
+            shutil.rmtree(out_dir)
+        extracted.rename(out_dir)
 
     if not out_dir.exists():
         raise RuntimeError(

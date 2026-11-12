@@ -53,27 +53,44 @@ and `:X.Y.Z` are both updated on each release.
 
 `osmotool` takes a single `DATABASE` argument: the path to an unpacked
 [`osmo_refdb`](https://github.com/barbarahelena/osmo_refdb) release
-directory (e.g. `v8/`) — download and unpack it with:
+directory (e.g. `v9/`) — download and unpack it with:
 
 ```bash
-osmotool download-db --release v8 --location /path/to/refdb
-# -> downloads + unpacks into /path/to/refdb/v8/
-osmotool profile /path/to/refdb/v8 ...
+osmotool download-db --release v9 --location /path/to/refdb
+# -> downloads + unpacks into /path/to/refdb/v9/
+osmotool profile /path/to/refdb/v9 ...
 ```
 
-`--release` defaults to `latest` (currently `v8`); `--location` defaults to
+`--release` defaults to `latest` (currently `v9`); `--location` defaults to
 the current directory. Already-extracted releases are left alone unless
 `--force` is passed, and the downloaded archive is deleted after a
 successful extraction unless `--keep_archive` is passed. The download is
 checksum-verified against Zenodo's reported md5 before extraction.
 
-**v8** (latest) — DOI: [10.5281/zenodo.21691253](https://doi.org/10.5281/zenodo.21691253).
+**v9** (latest) — DOI: [10.5281/zenodo.24154957](https://doi.org/10.5281/zenodo.24154957).
+Adds `teaA` (ectoine/hydroxyectoine TRAP binding protein, TeaA/UehA clade)
+and ships a `markers/` set of universal single-copy genes, which `profile`
+uses for copies-per-genome normalisation. Every family's benchmark negatives
+are now held out from cutoff calibration, and capped UniProt fetches sample
+the whole population instead of the first accessions in sort order; this
+lowered the ktrB and opuAC GA cutoffs and raised their genome-level recall
+(ktrB called in 0.18 → 0.43 of BacDive genomes, with the ktrA partner present
+in 0.96 of the new calls). A peptide ABC ATPase HMM decoy (`pepABC_decoy`)
+now competes with opuBA in `annotate`'s best-hit contest and is never
+reported. opuBA remains the least reliable family: low recall (HMM 0.13 on
+held-out reads) and a high random-background false-positive rate, so treat
+its calls with caution (see [the opuB limitation](#multi-subunit-systems-annotate-mode-only)
+below). Benchmark precision is not directly
+comparable to v8's, because the held-out negative pool is about half the size.
+
+**v8** — DOI: [10.5281/zenodo.21691253](https://doi.org/10.5281/zenodo.21691253).
 Calibration-only fix on top of v7's panel: corrects negative-pool
 mislabeling for 8 families (murB, mrpB, mrpE, mrpF, mrpG, gshB, cspA,
 mscS) and replaces 6 families' Pfam default HMM cutoffs with locally
 calibrated ones, improving short-fragment-read sensitivity (e.g. gshB F1
 0.47→0.88, mrpE F1 0.20→0.72; panel-wide DIAMOND F1 0.827→0.832, HMM F1
-0.693→0.722). No gene/family panel changes.
+0.693→0.722). No gene/family panel changes. Still downloadable
+(`--release v8`).
 
 **v7** — DOI: [10.5281/zenodo.21600046](https://doi.org/10.5281/zenodo.21600046).
 Adds the Firmicutes compatible-solute transporters (opuA/opuB/opuC), the
@@ -90,9 +107,9 @@ against the original panel.
 Or download manually:
 
 ```bash
-curl -LO https://zenodo.org/records/21691253/files/v8.tar.gz
-tar -xzf v8.tar.gz    # produces a v8/ directory
-osmotool profile v8 ...
+curl -LO https://zenodo.org/records/24154957/files/osmo_refdb_v9.tar.gz
+tar -xzf osmo_refdb_v9.tar.gz    # produces an osmo_refdb_v9/ directory
+osmotool profile osmo_refdb_v9 ...
 ```
 
 Cite the DOI of whichever release you used (alongside `osmotool` itself) in
@@ -133,7 +150,7 @@ whenever `osmo_refdb.profile_excluded_families.txt` is present in
 
 ```bash
 osmotool profile \
-  /path/to/osmo_refdb/releases/v8 \
+  /path/to/osmo_refdb/releases/v9 \
   -1 sample_R1.fastq.gz \
   -2 sample_R2.fastq.gz \
   --out_prefix results/sample \
@@ -147,7 +164,7 @@ Single-end reads:
 
 ```bash
 osmotool profile \
-  /path/to/osmo_refdb/releases/v8 \
+  /path/to/osmo_refdb/releases/v9 \
   --singles sample.fastq.gz \
   --out_prefix results/sample \
   --threads 8
@@ -157,7 +174,7 @@ DIAMOND-only, e.g. when `orfm`/`hmmsearch` aren't installed:
 
 ```bash
 osmotool profile \
-  /path/to/osmo_refdb/releases/v8 \
+  /path/to/osmo_refdb/releases/v9 \
   -1 sample_R1.fastq.gz -2 sample_R2.fastq.gz \
   --out_prefix results/sample \
   --no_cascade \
@@ -169,7 +186,7 @@ osmotool profile \
 ```bash
 # HMM (default method) with Prodigal ORF prediction:
 osmotool annotate \
-  /path/to/osmo_refdb/releases/v8 \
+  /path/to/osmo_refdb/releases/v9 \
   assembly.fasta \
   --out_prefix results/assembly \
   --threads 8
@@ -179,7 +196,7 @@ osmotool annotate \
 # applied automatically whenever osmo_refdb.diamond_cutoffs.tsv /
 # osmo_refdb.annotate_excluded_families.txt are present in DATABASE:
 osmotool annotate \
-  /path/to/osmo_refdb/releases/v8 \
+  /path/to/osmo_refdb/releases/v9 \
   assembly.fasta \
   --method diamond \
   --out_prefix results/assembly \
@@ -187,7 +204,7 @@ osmotool annotate \
 
 # With pre-called proteins (skip Prodigal):
 osmotool annotate \
-  /path/to/osmo_refdb/releases/v8 \
+  /path/to/osmo_refdb/releases/v9 \
   assembly.fasta \
   --proteins assembly_proteins.faa \
   --out_prefix results/assembly \
@@ -486,15 +503,29 @@ of the documentation, not functionally confirmed either, and worth an
 independent check by whoever has closer domain knowledge of osmo_refdb's own
 family curation.
 
-**Known refdb-level limitation (`opuB`)**: across all six validation species,
-`opuB` never once resolved to a full colocalized operon, even with the rescue
-above — always 1-2 of its 3 mandatory subunits. The rescue fixes the `opuBC`
-side (a real labeling ambiguity), but the other blocker, `opuBA`, is a different
-problem: in every species checked, there's no hit *at all*, under any family, at
-the position where it should be. That's a genuine HMM/DIAMOND recall gap in
-osmo_refdb's `opuBA` model, not a mislabeling — no positional reasoning can
-invent evidence that isn't there. Worth flagging back to osmo_refdb as a
-separate, distinct finding from the SBD confusion.
+**Known refdb-level limitation (`opuB`)**: `opuBA` is the least reliable
+family in the panel, so treat `opuBA` calls, and any `opuB` system call that
+depends on one, with caution. In the original six-species validation (run on
+releases before v9), `opuB` never resolved to a full colocalized operon, even
+with the rescue above: it always had 1-2 of its 3 mandatory subunits. The
+rescue fixes the `opuBC` side (a real labeling ambiguity). `opuBA` was a
+different problem: in every species checked there was no hit at all, under
+any family, where it should be, a recall gap in osmo_refdb's `opuBA` model
+that positional reasoning can't fix. v9 does not solve this and adds a
+precision problem on top. Its `pepABC_decoy` now takes peptide ABC ATPase
+hits away from `opuBA`, but the model is still weak (from osmo_refdb's v9
+benchmark):
+
+- HMM recall of 0.13 on held-out reads, with a GA cutoff calibrated on only
+  23 positives (F1 0.46)
+- about 4100 false positives per million random-background reads
+- genome-level presence doesn't track BacDive's maximum tolerated NaCl
+  (rho -0.02, rank 40 of 45 families)
+
+The remaining `opuBA` calls are probably other ABC ATPases that lack a
+peptide C-terminal domain (bare ABC_tran), which a decoy can't separate. A
+v9 `opuBA` hit therefore doesn't confirm the gene is there, and a missing
+hit doesn't rule it out.
 
 Relevant flags (see [Parameters](#parameters)): `--skip_systems` to disable this
 layer entirely, `--systems_config` to override the proximity window per system.
@@ -565,7 +596,7 @@ module load anaconda3
 conda activate osmotool
 
 osmotool profile \
-    /path/to/osmo_refdb/releases/v8 \
+    /path/to/osmo_refdb/releases/v9 \
     -1 ${SAMPLE}_R1.fastq.gz \
     -2 ${SAMPLE}_R2.fastq.gz \
     --out_prefix results/${SAMPLE} \
