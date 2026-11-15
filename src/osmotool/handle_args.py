@@ -40,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_profile_parser(sub)
     _add_annotate_parser(sub)
+    _add_predict_nacl_parser(sub)
     _add_download_parser(sub)
 
     return parser
@@ -229,6 +230,36 @@ def _add_download_parser(sub: argparse._SubParsersAction) -> None:
 # annotate subcommand
 # ---------------------------------------------------------------------------
 
+def _add_predict_nacl_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "predict-nacl",
+        help="Predict maximum NaCl tolerance from existing `annotate` output.",
+        description="Predict each genome's maximum NaCl tolerance (% w/v) from "
+                    "the output of an earlier `osmotool annotate --method hmm` "
+                    "run (osmotool >= 0.8.0) against the same DATABASE, with "
+                    "the model in DATABASE's nacl_model/. Writes "
+                    "<prefix>.nacl_prediction.tsv and "
+                    "<prefix>.nacl_contributions.tsv next to each prefix's "
+                    "annotate output, and prints one summary table. Use "
+                    "`annotate --predict_nacl` to do both in one run.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    p.add_argument(
+        "database", metavar="DATABASE",
+        help="The osmo_refdb release directory the genomes were annotated with "
+             "(it must contain nacl_model/).",
+    )
+    p.add_argument(
+        "prefixes", metavar="PREFIX", nargs="+",
+        help="annotate --out_prefix of each genome (so PREFIX.gene_counts.tsv "
+             "exists). For --method both output, pass PREFIX.hmm.",
+    )
+    p.add_argument(
+        "-o", "--output", default=None, metavar="TSV",
+        help="Write the summary table here instead of stdout.",
+    )
+
+
 def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "annotate",
@@ -288,6 +319,19 @@ def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:
              "extension spec -- see systems.py / README before trusting "
              "them in production. Mandatory/accessory/fusion membership is "
              "not overridable this way.",
+    )
+
+    nacl = p.add_argument_group("NaCl tolerance prediction")
+    nacl.add_argument(
+        "--predict_nacl", action="store_true", default=False,
+        help="Also predict the genome's maximum NaCl tolerance (%% w/v) with the "
+             "model in DATABASE's nacl_model/ (osmo_refdb v10 and later), from "
+             "the HMM counts. Writes <out_prefix>.nacl_prediction.tsv (value, 80%% "
+             "interval, flags, largest contributions) and "
+             "<out_prefix>.nacl_contributions.tsv (every feature's SHAP "
+             "contribution). Needs --method hmm or both, and the xgboost package "
+             "(pip install 'osmotool[predict]'). Salt-out organisms only: genomes "
+             "that look salt-in are flagged.",
     )
 
     _add_filter_args(p)

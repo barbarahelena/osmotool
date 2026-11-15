@@ -132,6 +132,7 @@ class RefDb:
     exclude_families: Path | None
     train_refs: Path | None = None    # osmo_refdb.train_refs.faa (profile only)
     markers: MarkerDb | None = None   # markers/ (profile only)
+    nacl_model: Path | None = None    # nacl_model/ directory (annotate only)
 
 
 def _resolve_markers(root: Path) -> MarkerDb | None:
@@ -154,6 +155,25 @@ def _resolve_markers(root: Path) -> MarkerDb | None:
                     exclude_families=excluded if excluded.exists() else None)
 
 
+def _resolve_nacl_model(root: Path) -> Path | None:
+    """nacl_model/ when the release ships the NaCl-max model (osmo_refdb
+    pipeline/13_package_nacl_model.py; releases before v10 don't). The
+    schema must name a model file that exists. Returns the directory; the
+    model itself is loaded by nacl.load_nacl_model only when asked for."""
+    d = root / "nacl_model"
+    schema = d / "feature_schema.json"
+    if not schema.exists():
+        return None
+    import json
+    model_file = json.loads(schema.read_text()).get("model_file", "")
+    if not model_file or not (d / model_file).exists():
+        raise FileNotFoundError(
+            f"{d} has feature_schema.json but its model file {model_file!r} is "
+            "missing -- repackage it with osmo_refdb's pipeline/13_package_nacl_model.py"
+        )
+    return d
+
+
 def resolve_refdb(database: str, mode: str) -> RefDb:
     """Resolve an osmo_refdb release directory into its fixed-name files.
 
@@ -166,7 +186,9 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
     ``osmo_refdb.annotate_excluded_families.txt``. This lets callers pass
     one directory instead of wiring up each file individually. In profile
     mode it also resolves ``osmo_refdb.train_refs.faa`` and the optional
-    ``markers/`` subdirectory used for copies-per-genome normalisation.
+    ``markers/`` subdirectory used for copies-per-genome normalisation; in
+    annotate mode, the optional ``nacl_model/`` subdirectory (NaCl-max
+    predictor, see nacl.py).
 
     *mode* is ``"profile"`` or ``"annotate"`` -- the only difference is
     which excluded-families list and cascade/cutoffs file apply. The
@@ -203,7 +225,9 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
     if exclude_families is not None and not exclude_families.exists():
         exclude_families = None
 
-    train_refs, markers = None, None
+    train_refs, markers, nacl_model = None, None, None
+    if mode == "annotate":
+        nacl_model = _resolve_nacl_model(root)
     if mode == "profile":
         train_refs = root / "osmo_refdb.train_refs.faa"
         if not train_refs.exists():
@@ -213,5 +237,5 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
     return RefDb(
         dmnd=dmnd, hmm=hmm, cascade_config=cascade_config,
         diamond_cutoffs=diamond_cutoffs, exclude_families=exclude_families,
-        train_refs=train_refs, markers=markers,
+        train_refs=train_refs, markers=markers, nacl_model=nacl_model,
     )

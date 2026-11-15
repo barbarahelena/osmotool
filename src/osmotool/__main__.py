@@ -6,11 +6,14 @@ from __future__ import annotations
 
 import logging
 import sys
+from pathlib import Path
 
 from osmotool.handle_args import build_parser
 from osmotool.runners import run_profile, run_annotate
 from osmotool.download import download_refdb
 from osmotool.utils import setup_logging, resolve_refdb
+from osmotool.nacl import (annotate_method_and_release, load_nacl_model,
+                           predict_from_prefix, write_prediction_table)
 
 log = logging.getLogger("osmotool")
 
@@ -81,7 +84,19 @@ def main(argv: list[str] | None = None) -> int:
                     f"{args.database}, but it wasn't found (pass --method diamond "
                     "instead if you don't have it)"
                 )
-            run_annotate(
+            nacl_model = None
+            if args.predict_nacl:
+                if args.method == "diamond":
+                    parser.error("--predict_nacl uses the HMM counts the model was "
+                                 "trained on: pass --method hmm (default) or both")
+                if refdb.nacl_model is None:
+                    parser.error(f"--predict_nacl needs nacl_model/ in {args.database}, "
+                                 "which this release doesn't ship (osmo_refdb v10 and "
+                                 "later do)")
+                # load before the (long) annotation run, so a missing xgboost
+                # or an unsupported model fails fast
+                nacl_model = load_nacl_model(refdb.nacl_model)
+            results = run_annotate(
                 str(refdb.dmnd),
                 args.assembly,
                 args.out_prefix,
@@ -101,6 +116,38 @@ def main(argv: list[str] | None = None) -> int:
                 skip_systems=args.skip_systems,
                 systems_config=args.systems_config,
             )
+            if nacl_model is not None:
+                counts_path, _, systems_path, _ = results["hmm"]
+                prefix = str(counts_path)[: -len(".gene_counts.tsv")]
+                predict_from_prefix(nacl_model, prefix, counts_path, systems_path)
+
+        elif args.subcommand == "predict-nacl":
+            refdb = resolve_refdb(args.database, mode="annotate")
+            if refdb.nacl_model is None:
+                parser.error(f"no nacl_model/ in {args.database}: this release doesn't "
+                             "ship the NaCl model (osmo_refdb v10 and later do)")
+            nacl_model = load_nacl_model(refdb.nacl_model)
+            preds = []
+            for prefix in args.prefixes:
+                if not Path(f"{prefix}.gene_counts.tsv").exists():
+                    raise FileNotFoundError(f"{prefix}.gene_counts.tsv not found -- PREFIX "
+                                            "is an annotate --out_prefix")
+                method, release = annotate_method_and_release(prefix)
+                if method is not None and method != "hmm":
+                    raise ValueError(f"{prefix} is annotate --method {method} output; the "
+                                     "model needs HMM counts (for --method both output, "
+                                     "pass PREFIX.hmm)")
+                if release is not None and release != nacl_model.release:
+                    log.warning("%s was annotated with a database in '%s/'; the model was "
+                                "trained on osmo_refdb %s counts. Predictions are only valid "
+                                "if that is the same release.", prefix, release,
+                                nacl_model.release)
+                preds.append(predict_from_prefix(nacl_model, prefix))
+            if args.output:
+                write_prediction_table(args.output, nacl_model, preds)
+                log.info("NaCl predictions for %d genome(s): %s", len(preds), args.output)
+            else:
+                write_prediction_table("/dev/stdout", nacl_model, preds)
 
         elif args.subcommand == "download-db":
             out_dir = download_refdb(
