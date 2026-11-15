@@ -32,6 +32,9 @@ pip install -e .
 ```bash
 pip install osmotool
 # requires diamond and prodigal on PATH
+
+# for NaCl-tolerance prediction (annotate --predict_nacl, predict-nacl):
+pip install 'osmotool[predict]'   # adds xgboost
 ```
 
 ### Container (Docker / Singularity)
@@ -209,6 +212,26 @@ osmotool annotate \
   --proteins assembly_proteins.faa \
   --out_prefix results/assembly \
   --threads 8
+
+# Also predict the genome's maximum NaCl tolerance (osmo_refdb v10+, needs
+# xgboost -- see "NaCl tolerance prediction" below):
+osmotool annotate \
+  /path/to/osmo_refdb/releases/v10 \
+  assembly.fasta \
+  --predict_nacl \
+  --out_prefix results/assembly \
+  --threads 8
+```
+
+### Predict NaCl tolerance from existing annotate output
+
+```bash
+# one or more annotate --out_prefix values (made with --method hmm and the
+# same release); writes <prefix>.nacl_prediction.tsv and
+# <prefix>.nacl_contributions.tsv next to each, plus one summary table
+osmotool predict-nacl /path/to/osmo_refdb/releases/v10 \
+  results/genomeA results/genomeB \
+  -o results/nacl_predictions.tsv
 ```
 
 ## Output
@@ -220,6 +243,8 @@ osmotool annotate \
 | `<prefix>.markers.tsv` | `profile` only, when DATABASE ships `markers/` — per-marker evidence behind `copies_per_genome` (see [Copies per genome](#copies-per-genome-profile-mode) below) |
 | `<prefix>.systems.tsv` | `annotate` only — multi-subunit system calls (see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only) below) |
 | `<prefix>.gene_coordinates.tsv` | `annotate` only — per-gene contig/start/end/strand coordinates (see [`gene_coordinates.tsv` format](#gene_coordinatestsv-format-annotate-mode-only) below) |
+| `<prefix>.nacl_prediction.tsv` | `annotate --predict_nacl` / `predict-nacl` only — predicted maximum NaCl tolerance with interval and flags (see [NaCl tolerance prediction](#nacl-tolerance-prediction-annotate-mode) below) |
+| `<prefix>.nacl_contributions.tsv` | same — every feature's contribution to that prediction |
 
 ### `gene_counts.tsv` format
 
@@ -349,6 +374,55 @@ assembly-derived (Prodigal-style) coordinates, so it's only written in
 skipped under the same conditions as `systems.tsv` (`--skip_systems`, or
 `--proteins` supplied with non-Prodigal headers). Excluded families (per
 `--exclude_families`) are left out here too, same as in `gene_counts.tsv`.
+
+## NaCl tolerance prediction (`annotate` mode)
+
+osmo_refdb v10 and later ship a model in `nacl_model/` that predicts the
+highest NaCl concentration (% w/v) at which a **salt-out** prokaryote grows,
+as BacDive records it, from a genome's annotate output. It was trained in
+osmo_refdb (`pipeline/nacl_model/`) on 6,264 BacDive strains; the release's
+`nacl_model/README.md` describes how it works, how well, and what it weighs.
+
+- **Input.** The HMM counts of the 43 osmo families plus `total_proteins`, `gc`
+  and `n_contigs`, all from `gene_counts.tsv` (osmotool >= 0.8.0 writes the
+  header lines it needs). No taxonomy. Only `--method hmm` output against the
+  same release is valid: the counts depend on that release's HMM cutoffs.
+- **Model.** XGBoost regression trees. Each prediction is split exactly into a
+  base value (the training mean) plus one contribution per feature (TreeSHAP),
+  in % NaCl.
+- **Accuracy.** Tested on genomes from genera the model never saw: Spearman
+  0.69, mean absolute error 2.5% NaCl, R² 0.49. A model given only genome size
+  and GC reaches R² 0.06, so the signal comes from the osmo genes.
+- **How to read it.** Predictions are compressed toward the middle: strains that
+  barely tolerate salt are over-predicted (about 3% for a true ≤1%), extreme
+  halotolerants under-predicted (about 13% for a true >15%). Treat the value as
+  a ranking plus a rough level, with the interval as its uncertainty.
+- **Salt-in organisms** (Halobacteria, Salinibacter, Halanaerobiales)
+  accumulate KCl instead of compatible solutes and are outside the model's
+  domain; a separate detector flags genomes that look like them.
+
+`<prefix>.nacl_prediction.tsv` (`predict-nacl -o` writes the same table with one
+row per genome):
+
+```
+# model     nacl_max (osmo_refdb v10, annotate --method hmm)
+# ...
+genome  nacl_max_pred  nacl_max_lo  nacl_max_hi  p_salt_in  flags  base_value  top_contributions
+ecoli   7.17           2.90         11.11        0.000      ok     5.917       trkH=2:+0.85;betL=0:-0.53;trkA=1:+0.27;...
+```
+
+| Column | Meaning |
+|---|---|
+| `nacl_max_pred` | predicted maximum NaCl, % w/v |
+| `nacl_max_lo`, `nacl_max_hi` | 80% prediction interval (split-conformal, from out-of-genus errors) |
+| `p_salt_in` | salt-in detector probability |
+| `flags` | `salt_in_like` (prediction not reliable); `out_of_range(n)` (n features outside the training 1st–99th percentile); `many_contigs` (more contigs than 99% of training genomes); `few_proteins`; `no_systems` (no `systems.tsv`, so the salt-in detector is less reliable); `missing:<feature>`; `ok` if none |
+| `base_value` | the starting point every prediction is built from (training mean) |
+| `top_contributions` | the six largest contributions, `feature=value:+shap` |
+
+`<prefix>.nacl_contributions.tsv` lists every feature's value and contribution,
+largest first; `base_value` plus the `shap` column sums to the prediction
+(before clipping at 0).
 
 ## Multi-subunit systems (`annotate` mode only)
 
@@ -556,6 +630,7 @@ assembly+binning step) on the same samples.
 | `--keep_aln` / `--keep_proteins` | off | Retain intermediate alignment/protein files instead of deleting them after the run |
 | `--skip_systems` | off | `annotate` only. Skip the [multi-subunit systems](#multi-subunit-systems-annotate-mode-only) layer entirely — no `<prefix>.systems.tsv`, no `<prefix>.gene_coordinates.tsv`, no ORF-coordinate parsing |
 | `--systems_config` | none | `annotate` only. TSV overriding `max_distance_genes`/`max_distance_bp` per system (columns: `system`, `max_distance_genes`, `max_distance_bp`) — see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only) |
+| `--predict_nacl` | off | `annotate` only. Also predict the maximum NaCl tolerance with DATABASE's `nacl_model/` (osmo_refdb v10+; needs `--method hmm`/`both` and xgboost) — see [NaCl tolerance prediction](#nacl-tolerance-prediction-annotate-mode) |
 
 DIAMOND per-family cutoffs (`osmo_refdb.diamond_cutoffs.tsv`) and
 scope-excluded-families reporting filters
