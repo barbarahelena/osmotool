@@ -10,13 +10,14 @@ from pathlib import Path
 import pytest
 
 from osmotool.catalog import (
-    ALIGNERS, ANNOTATED, DECOY, HOMOLOG, Catalog, CatalogGene, assign_gene,
-    classify_alignment, load_catalog, norm_read_id, parse_domtblout, read_ga_cutoffs,
-    translate, write_fallback_fastq,
+    ALIGNERS, ANNOTATED, BACKGROUND, DECOY, HOMOLOG, INDEX_META, Catalog, CatalogGene,
+    alternative_placements, assign_gene, classify_alignment, load_catalog, norm_read_id,
+    parse_domtblout, read_ga_cutoffs, settle_records, translate, write_fallback_fastq,
 )
 from osmotool.functions import ReportUnit
 from osmotool.output import write_gene_counts, write_unit_counts
 from osmotool.quantifier import aggregate_report_units
+from osmotool.utils import resolve_refdb, select_catalog
 
 
 # ---------------------------------------------------------------------------
@@ -69,13 +70,18 @@ def test_parse_and_assign(tmp_path: Path):
 def _catalog() -> Catalog:
     return Catalog(root=Path("."), fna=Path("catalog.fna"), genes={
         "geneA": CatalogGene("ectA", ANNOTATED, 600, (31, 540)),
+        "geneA2": CatalogGene("ectA", ANNOTATED, 600, (31, 540)),
+        "geneB": CatalogGene("ectB", ANNOTATED, 900, (1, 900)),
         "geneH": CatalogGene("", HOMOLOG, 600, None),
         "geneD": CatalogGene("pep_decoy", DECOY, 900, (1, 900)),
     })
 
 
-def _sam(rname="geneA", pos=100, cigar="150M", nm=1, flag=0):
-    return ["r1", str(flag), rname, str(pos), "60", cigar, "*", "0", "0", "*", "*", f"NM:i:{nm}"]
+def _sam(rname="geneA", pos=100, cigar="150M", nm=1, flag=0, xa=None, qname="r1"):
+    f = [qname, str(flag), rname, str(pos), "60", cigar, "*", "0", "0", "*", "*", f"NM:i:{nm}"]
+    if xa:
+        f.append("XA:Z:" + "".join(f"{g},+{p},{c},{n};" for g, p, c, n in xa))
+    return f
 
 
 @pytest.mark.parametrize("fields,decision,label", [
@@ -85,6 +91,7 @@ def _sam(rname="geneA", pos=100, cigar="150M", nm=1, flag=0):
     (_sam(cigar="80M70S", nm=0), "call", "ectA"),              # runs off the gene end
     (_sam(rname="geneH"), "drop", HOMOLOG),
     (_sam(rname="geneD"), "drop", DECOY),
+    (_sam(rname="geneX"), "drop", BACKGROUND),                 # indexed, no HMM hit
     (_sam(pos=500), "drop", "outside_envelope"),               # 500-649 vs env ..540
     (_sam(pos=430), "call", "ectA"),                           # 430-579: 111 of 150 inside
     (_sam(flag=4, rname="*"), "fallback", ""),
@@ -116,15 +123,28 @@ def test_write_fallback_fastq_skips_settled_reads(tmp_path: Path):
 # loading
 # ---------------------------------------------------------------------------
 
-def _catalog_dir(tmp_path: Path, aligner="bwa-mem3", hmm_sha="abc") -> Path:
+def _catalog_dir(tmp_path: Path, aligner="bwa-mem3", hmm_sha="abc", index="all",
+                 genes_sha="g1") -> Path:
     (tmp_path / "catalog.fna").write_text(">geneA\nACGT\n")
-    for suf in ALIGNERS[aligner]["index_suffixes"]:
-        (tmp_path / f"catalog.fna{suf}").write_text("")
+    if index != "none":
+        for suf in ALIGNERS[aligner]["index_suffixes"]:
+            (tmp_path / f"catalog.fna{suf}").write_text("")
     (tmp_path / "catalog.annotation.tsv").write_text(
         "gene\tlabel\tstatus\tgene_nt\tenv_nt_start\tenv_nt_end\tscore\tbest_model\tbest_score\n"
         "geneA\tectA\tannotated\t600\t31\t540\t120.0\tectA\t120.0\n"
         "geneH\t\thomolog\t600\t\t\t\tectA\t22.0\n")
-    (tmp_path / "catalog.json").write_text(json.dumps({"aligner": aligner, "hmm_sha256": hmm_sha}))
+    (tmp_path / "catalog.json").write_text(json.dumps(
+        {"aligner": aligner, "hmm_sha256": hmm_sha, "index": index, "genes_sha256": genes_sha,
+         "genes": "genes.fna.gz"}))
+    return tmp_path
+
+
+def _index_dir(tmp_path: Path, genes_sha="g1", aligner="bwa-mem3") -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    for suf in ALIGNERS[aligner]["index_suffixes"]:
+        (tmp_path / f"catalog.fna{suf}").write_text("")
+    (tmp_path / INDEX_META).write_text(json.dumps(
+        {"index": "all", "aligner": aligner, "genes_sha256": genes_sha, "genes": "genes.fna.gz"}))
     return tmp_path
 
 
@@ -136,11 +156,36 @@ def test_load_catalog(tmp_path: Path):
     assert load_catalog(tmp_path, aligner_bin="/opt/x/bwa-mem3").aligner_bin == "/opt/x/bwa-mem3"
 
 
+def test_load_catalog_needs_no_fasta(tmp_path: Path):
+    d = _catalog_dir(tmp_path)
+    (d / "catalog.fna").unlink()          # index="all": only the index is in the catalog dir
+    assert load_catalog(d).fna == d / "catalog.fna"
+
+
 def test_load_catalog_missing_index(tmp_path: Path):
     d = _catalog_dir(tmp_path)
     (d / "catalog.fna.bwt.2bit.64").unlink()
     with pytest.raises(FileNotFoundError, match="bwt.2bit.64"):
         load_catalog(d)
+
+
+def test_annotation_only_catalog_needs_an_index(tmp_path: Path):
+    (tmp_path / "cat").mkdir()
+    d = _catalog_dir(tmp_path / "cat", index="none")
+    with pytest.raises(ValueError, match="--catalog_index"):
+        load_catalog(d)
+    cat = load_catalog(d, index_dir=_index_dir(tmp_path / "idx"))
+    assert cat.fna == tmp_path / "idx" / "catalog.fna" and cat.index_kind == "all"
+
+
+def test_external_index_must_come_from_the_same_gene_file(tmp_path: Path):
+    (tmp_path / "cat").mkdir()
+    d = _catalog_dir(tmp_path / "cat", index="hits")
+    assert load_catalog(d).index_kind == "hits"
+    with pytest.raises(ValueError, match="different gene file"):
+        load_catalog(d, index_dir=_index_dir(tmp_path / "idx", genes_sha="other"))
+    with pytest.raises(FileNotFoundError, match="catalog_index.json"):
+        load_catalog(d, index_dir=tmp_path / "cat")
 
 
 def test_load_catalog_other_release(tmp_path: Path):
@@ -163,10 +208,13 @@ UNITS = [ReportUnit("ectA", "gene", ("ectA",)),
 
 def test_units_with_sources():
     counts = {"ectA": 3.0, "opuAB": 1.0, "opuBB": 2.0, "opuAC": 4.0}
-    sources = {"ectA": (2.0, 1.0), "opuAB": (1.0, 0.0), "opuBB": (0.5, 1.5), "opuAC": (1.5, 2.5)}
+    sources = {"ectA": (2.0, 0.5, 1.0), "opuAB": (1.0, 0.0, 0.0), "opuBB": (0.5, 0.25, 1.5),
+               "opuAC": (1.5, 0.0, 2.5)}
     rows = {r["unit"]: r for r in aggregate_report_units(UNITS, counts, counts, sources=sources)}
-    assert (rows["ectA"]["catalog_count"], rows["ectA"]["translated_count"]) == (2.0, 1.0)
-    assert (rows["opu_permease"]["catalog_count"], rows["opu_permease"]["translated_count"]) == (1.5, 1.5)
+    assert (rows["ectA"]["catalog_count"], rows["ectA"]["catalog_ambiguous"],
+            rows["ectA"]["translated_count"]) == (2.0, 0.5, 1.0)
+    assert (rows["opu_permease"]["catalog_count"], rows["opu_permease"]["catalog_ambiguous"],
+            rows["opu_permease"]["translated_count"]) == (1.5, 0.25, 1.5)
     ac = rows["opuAC"]
     assert ac["status"] == "catalog_only" and ac["catalog_count"] == 1.5
     assert ac["raw_count"] is None and ac["translated_count"] is None
@@ -174,19 +222,108 @@ def test_units_with_sources():
 
 def test_unit_counts_file_with_sources(tmp_path: Path):
     counts = {"ectA": 3.0, "opuAC": 4.0}
-    sources = {"ectA": (2.0, 1.0), "opuAC": (1.5, 2.5)}
+    sources = {"ectA": (2.0, 0.5, 1.0), "opuAC": (1.5, 0.0, 2.5)}
     rows = aggregate_report_units(UNITS, counts, counts, sources=sources)
     lines = write_unit_counts(tmp_path / "s", rows, total_reads=10, filtered_reads=5,
                               report_levels="r.tsv", with_sources=True).read_text().splitlines()
-    assert lines[3].endswith("RPM\tcatalog_count\ttranslated_count")
-    assert lines[4] == "ectA\tgene\tectA\treported\t3.0\t3\t2.0\t1.0"
-    assert lines[6] == "opuAC\tnone\topuAC\tcatalog_only\tNA\tNA\t1.5\tNA"
+    assert lines[3].endswith("RPM\tcatalog_count\tcatalog_ambiguous\ttranslated_count")
+    assert lines[4] == "ectA\tgene\tectA\treported\t3.0\t3\t2.0\t0.50\t1.0"
+    assert lines[6] == "opuAC\tnone\topuAC\tcatalog_only\tNA\tNA\t1.5\t0.00\tNA"
 
 
 def test_gene_counts_with_sources(tmp_path: Path):
     path = write_gene_counts(tmp_path / "s", {"ectA": 3.0}, {"ectA": 30.0}, total_reads=10,
-                             filtered_reads=3, count_sources={"ectA": (2.0, 1.0)},
+                             filtered_reads=3, count_sources={"ectA": (2.0, 0.25, 1.0)},
                              copies_per_genome={"ectA": 0.5})
     lines = path.read_text().splitlines()
-    assert lines[2] == "gene\traw_count\tRPM\tcatalog_count\ttranslated_count\tcopies_per_genome"
-    assert lines[3] == "ectA\t3.0\t30\t2.0\t1.0\t0.5"
+    assert lines[2] == ("gene\traw_count\tRPM\tcatalog_count\tcatalog_ambiguous\ttranslated_count"
+                        "\tcopies_per_genome")
+    assert lines[3] == "ectA\t3.0\t30\t2.0\t0.25\t1.0\t0.5"
+
+
+# ---------------------------------------------------------------------------
+# settle_records: unique, ambiguous, fallback
+# ---------------------------------------------------------------------------
+
+def _line(**kw) -> str:
+    return "\t".join(_sam(**kw)) + "\n"
+
+
+def _settle(lines, paired=False):
+    return settle_records(["@HD\tVN:1.6\n", *lines], _catalog(), paired=paired,
+                          min_identity=0.97, min_aligned=45)
+
+
+def test_alternative_placements_parses_xa():
+    f = _sam(xa=[("geneB", 10, "150M", 0), ("geneH", 5, "100M50S", 2)])
+    assert alternative_placements(f) == [("geneB", 10, "150M", 0), ("geneH", 5, "100M50S", 2)]
+    assert alternative_placements(_sam()) == []
+
+
+def test_settle_unique_call_and_same_family_alternative():
+    # an alternative on another ectA gene does not make the read ambiguous
+    res = _settle([_line(xa=[("geneA2", 100, "150M", 1)])])
+    assert res.counts == {"ectA": 1.0} and res.n_ambiguous == 0 and res.ambiguous == {}
+
+
+def test_settle_ambiguous_between_families_is_split_and_kept_out_of_counts():
+    res = _settle([_line(xa=[("geneB", 10, "150M", 0)])])
+    assert res.counts == {} and res.n_ambiguous == 1
+    assert res.ambiguous == {"ectA": 0.5, "ectB": 0.5}
+    assert res.accepted[0] == {"r1"}                    # settled: no fallback
+
+
+def test_settle_ambiguous_call_vs_background_keeps_only_the_family_share():
+    res = _settle([_line(xa=[("geneX", 10, "150M", 0)])])
+    assert res.ambiguous == {"ectA": 0.5} and res.counts == {}
+
+
+def test_settle_ignores_alternatives_below_thresholds():
+    res = _settle([_line(xa=[("geneB", 10, "150M", 9)])])   # 94% identity
+    assert res.counts == {"ectA": 1.0} and res.n_ambiguous == 0
+
+
+def test_settle_fallback_secondary_and_mates():
+    lines = [
+        _line(qname="p/1", flag=0x41),                      # mate 1, call
+        _line(qname="p/2", flag=0x81, nm=10),               # mate 2, 93%: fallback
+        _line(qname="p/1", flag=0x141, rname="geneB"),      # secondary: skipped
+    ]
+    res = _settle(lines, paired=True)
+    assert res.n_reads == 2 and res.n_fallback == 1
+    assert res.counts == {"ectA": 0.5}
+    assert res.accepted[1] == {"p"} and res.accepted[2] == set()
+
+
+# ---------------------------------------------------------------------------
+# catalogs shipped with a release
+# ---------------------------------------------------------------------------
+
+def _release_with_catalog(tmp_path: Path) -> Path:
+    rel = tmp_path / "v99"
+    rel.mkdir()
+    (rel / "osmo_refdb.dmnd").write_text("")
+    cdir = rel / "catalogs" / "gmgc_gut"
+    cdir.mkdir(parents=True)
+    _catalog_dir(cdir)
+    (rel / "catalogs" / "not_a_catalog").mkdir()
+    return rel
+
+
+def test_resolve_refdb_finds_release_catalogs(tmp_path: Path):
+    rel = _release_with_catalog(tmp_path)
+    refdb = resolve_refdb(str(rel), mode="profile")
+    assert refdb.catalogs == {"gmgc_gut": rel / "catalogs" / "gmgc_gut"}
+    assert resolve_refdb(str(rel), mode="annotate").catalogs == {}
+
+
+def test_select_catalog_by_name_or_path(tmp_path: Path):
+    rel = _release_with_catalog(tmp_path)
+    refdb = resolve_refdb(str(rel), mode="profile")
+    assert select_catalog(refdb, "gmgc_gut") == rel / "catalogs" / "gmgc_gut"
+    own = tmp_path / "own"
+    own.mkdir()
+    _catalog_dir(own)
+    assert select_catalog(refdb, str(own)) == own
+    with pytest.raises(ValueError, match="gmgc_gut"):
+        select_catalog(refdb, "marine")

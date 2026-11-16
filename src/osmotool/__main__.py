@@ -11,8 +11,8 @@ from pathlib import Path
 from osmotool.handle_args import build_parser
 from osmotool.runners import run_profile, run_annotate
 from osmotool.download import download_refdb
-from osmotool.utils import setup_logging, resolve_refdb, check_tool
-from osmotool.catalog import build_catalog, load_catalog
+from osmotool.utils import setup_logging, resolve_refdb, check_tool, select_catalog
+from osmotool.catalog import build_catalog, index_catalog, load_catalog
 from osmotool.functions import load_excluded_families
 from osmotool.nacl import (annotate_method_and_release, load_nacl_model,
                            predict_from_prefix, write_prediction_table)
@@ -61,10 +61,16 @@ def main(argv: list[str] | None = None) -> int:
                 if refdb.hmm is None:
                     parser.error(f"--catalog needs hmms/osmo_refdb.hmm in {args.database} "
                                  "to check the catalog was annotated with this release")
-                catalog = load_catalog(args.catalog, hmm_db=refdb.hmm,
-                                       aligner_bin=args.aligner_bin)
+                catalog = load_catalog(select_catalog(refdb, args.catalog), hmm_db=refdb.hmm,
+                                       aligner_bin=args.aligner_bin,
+                                       index_dir=args.catalog_index)
+            elif args.catalog_index is not None:
+                parser.error("--catalog_index needs --catalog")
             elif args.catalog_only:
                 parser.error("--catalog_only needs --catalog")
+            elif refdb.catalogs:
+                log.info("%s ships gene catalog(s) %s; pass --catalog NAME to use one.",
+                         args.database, ", ".join(refdb.catalogs))
             if refdb.report_levels is None:
                 log.info("No osmo_refdb.profile_report_levels.tsv in %s: no unit_counts.tsv "
                          "(release predates report levels).", args.database)
@@ -180,8 +186,13 @@ def main(argv: list[str] | None = None) -> int:
                 refdb.hmm, args.genes, args.out_dir, proteins=args.proteins,
                 decoy_models=decoys, release=args.database, threads=args.threads,
                 min_protein_length=args.min_protein_length, evalue=args.evalue,
-                aligner=args.aligner, aligner_bin=args.aligner_bin,
+                aligner=args.aligner, aligner_bin=args.aligner_bin, index=args.index,
             ))
+
+        elif args.subcommand == "index-catalog":
+            check_tool(args.aligner_bin or args.aligner)
+            print(index_catalog(args.genes, args.out_dir, aligner=args.aligner,
+                                aligner_bin=args.aligner_bin))
 
         elif args.subcommand == "download-db":
             out_dir = download_refdb(

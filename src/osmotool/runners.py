@@ -89,7 +89,7 @@ def run_profile(
     report_levels: str | None = None,
     catalog: Catalog | None = None,
     catalog_min_identity: float = 0.97,
-    catalog_min_aligned: int = 60,
+    catalog_min_aligned: int = 45,
     translated_fallback: bool = True,
 ) -> tuple[Path, Path]:
     """
@@ -140,15 +140,17 @@ def run_profile(
         Catalog-based assignment first (see catalog.py; built once with
         `osmotool build-catalog`). Reads are mapped with the catalog's
         aligner (bwa-mem3 by default); a read aligned at >=
-        catalog_min_identity over >= catalog_min_aligned bp is settled by
-        the catalog's full-length HMM annotation -- counted for that family
-        if it lies in the gene's HMM envelope, dropped otherwise (homolog
-        below GA, HMM decoy, other domain). Only the remaining reads go to
-        DIAMOND and the cascade, unless translated_fallback is False
-        (catalog-only, e.g. a gut cohort with a matching catalog). Counts
-        are the sum of both; gene_counts.tsv and unit_counts.tsv show
-        catalog_count and translated_count separately. Markers always see
-        all reads.
+        catalog_min_identity over >= catalog_min_aligned bp (Cayman's
+        defaults: 0.97, 45) is settled by the catalog's full-length HMM
+        annotation -- counted for that family if it lies in the gene's HMM
+        envelope, dropped otherwise (background gene, homolog below GA, HMM
+        decoy, other domain), or counted as ambiguous if equally valid
+        placements disagree. Only the remaining reads go to DIAMOND and the
+        cascade, unless translated_fallback is False (catalog-only, e.g. a
+        gut cohort with a matching catalog). raw_count is the catalog's
+        unique calls plus the translated calls; gene_counts.tsv and
+        unit_counts.tsv show catalog_count, catalog_ambiguous and
+        translated_count separately. Markers always see all reads.
     report_levels:
         Optional path to osmo_refdb's <release>.profile_report_levels.tsv
         (v10 and later): the level at which each family is reliable on
@@ -255,9 +257,10 @@ def run_profile(
     sources = None
     if cat is not None:
         translated = counts
-        families = set(translated) | set(cat.counts)
+        families = set(translated) | set(cat.counts) | set(cat.ambiguous)
         counts = {f: translated.get(f, 0.0) + cat.counts.get(f, 0.0) for f in families}
-        sources = {f: (cat.counts.get(f, 0.0), translated.get(f, 0.0)) for f in families}
+        sources = {f: (cat.counts.get(f, 0.0), cat.ambiguous.get(f, 0.0), translated.get(f, 0.0))
+                   for f in families}
         filtered_reads += cat.n_called
     if exclude_families is not None:
         excluded = load_excluded_families(exclude_families)
@@ -337,7 +340,9 @@ def _catalog_stats(catalog: Catalog | None, cat, translated_fallback: bool) -> d
     return {
         "catalog": str(catalog.root),
         "catalog_aligner": catalog.aligner_bin,
+        "catalog_index": f"{catalog.index_kind} ({catalog.fna.parent})",
         "catalog_reads_called": cat.n_called,
+        "catalog_reads_ambiguous": cat.n_ambiguous,
         "catalog_reads_dropped": cat.n_dropped,
         "catalog_dropped_by_reason": ",".join(f"{k}:{v}" for k, v in
                                               sorted(cat.dropped_by_reason.items())) or "none",

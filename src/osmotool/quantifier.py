@@ -230,7 +230,7 @@ def aggregate_report_units(
     counts: dict[str, float],
     rpm: dict[str, float],
     copies_per_genome: dict[str, float | None] | None = None,
-    sources: dict[str, tuple[float, float]] | None = None,
+    sources: dict[str, tuple[float, float, float]] | None = None,
 ) -> list[dict]:
     """
     Per-family counts → one row per reporting unit, in manifest order.
@@ -249,26 +249,29 @@ def aggregate_report_units(
     from the table unannounced.
 
     sources (``profile --catalog``): {family: (catalog_count,
-      translated_count)}; rows get both, summed over members. An excluded
-      unit then becomes status "catalog_only": the catalog's full-length
-      calls are reliable at gene level, so catalog_count is given, while
-      raw_count, rpm and translated_count stay None (reads outside the
-      catalog could not be assigned).
+      catalog_ambiguous, translated_count)}; rows get all three, summed over
+      members. An excluded unit then becomes status "catalog_only": the
+      catalog's full-length calls are reliable at gene level, so its catalog
+      counts are given, while raw_count, rpm and translated_count stay None
+      (reads outside the catalog could not be assigned).
 
     Rows: unit, report_level, members (tuple), status, raw_count, rpm,
-    copies_per_genome, catalog_count, translated_count.
+    copies_per_genome, catalog_count, catalog_ambiguous, translated_count.
     """
     rows: list[dict] = []
     covered: set[str] = set()
     for u in units:
         covered.update(u.members)
-        cat_sum = (sum(sources.get(m, (0.0, 0.0))[0] for m in u.members)
-                   if sources is not None else None)
+        def src(i):
+            return (sum(sources.get(m, (0.0, 0.0, 0.0))[i] for m in u.members)
+                    if sources is not None else None)
+        cat_sum, amb_sum = src(0), src(1)
         if u.report_level == "none":
             rows.append({"unit": u.unit, "report_level": "none", "members": u.members,
                          "status": "excluded" if sources is None else "catalog_only",
                          "raw_count": None, "rpm": None, "copies_per_genome": None,
-                         "catalog_count": cat_sum, "translated_count": None})
+                         "catalog_count": cat_sum, "catalog_ambiguous": amb_sum,
+                         "translated_count": None})
             continue
         missing = [m for m in u.members if m not in counts]
         if missing:
@@ -286,8 +289,8 @@ def aggregate_report_units(
             "rpm": sum(rpm.get(m, 0.0) for m in u.members),
             "copies_per_genome": copies,
             "catalog_count": cat_sum,
-            "translated_count": (sum(sources.get(m, (0.0, 0.0))[1] for m in u.members)
-                                 if sources is not None else None),
+            "catalog_ambiguous": amb_sum,
+            "translated_count": src(2),
         })
     for label in sorted(set(counts) - covered):
         if counts[label] > 0:
@@ -295,8 +298,9 @@ def aggregate_report_units(
                          "status": "not_in_manifest", "raw_count": counts[label],
                          "rpm": rpm.get(label, 0.0),
                          "copies_per_genome": (copies_per_genome or {}).get(label),
-                         "catalog_count": sources.get(label, (0.0, 0.0))[0] if sources else None,
-                         "translated_count": sources.get(label, (0.0, 0.0))[1] if sources else None})
+                         "catalog_count": sources.get(label, (0.0, 0.0, 0.0))[0] if sources else None,
+                         "catalog_ambiguous": sources.get(label, (0.0, 0.0, 0.0))[1] if sources else None,
+                         "translated_count": sources.get(label, (0.0, 0.0, 0.0))[2] if sources else None})
     return rows
 
 

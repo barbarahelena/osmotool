@@ -9,26 +9,36 @@ decision `annotate --method hmm` makes on Prodigal ORFs. Reads are then
 assigned by near-exact nucleotide matching (bwa-mem3 mem by default) to those genes.
 
   build_catalog       genes.fna (+ optional proteins) -> catalog directory:
-                      catalog.fna (only genes with an HMM hit), bwa index,
-                      catalog.annotation.tsv, catalog.json
+                      an aligner index of the whole catalog (default, as
+                      Cayman: reads map competitively against every gene)
+                      or of the HMM-hit genes only (index="hits", small),
+                      catalog.annotation.tsv (the hit genes), catalog.json
   map_reads           reads -> per-read catalog decisions:
                         call      primary alignment >= min_identity over
                                   >= min_aligned bp, on an annotated gene,
                                   inside its HMM envelope
                         drop      same alignment quality, but on a gene the
-                                  full-length HMMs did NOT assign (a homolog
-                                  below GA, or an HMM decoy), or outside the
-                                  envelope: confidently not that family
+                                  full-length HMMs did NOT assign (background
+                                  gene without a hit, homolog below GA, HMM
+                                  decoy), or outside the envelope:
+                                  confidently not that family
+                        ambiguous several placements pass the thresholds
+                                  (XA tag) and disagree on the label: settled
+                                  (no fallback) but counted separately,
+                                  split over its families
                         fallback  unmapped or below the thresholds: the read
                                   goes on to the translated search (DIAMOND
                                   + cascade + report levels), unless
                                   profile runs catalog-only
 
-Genes with only a sub-GA hit are kept in catalog.fna on purpose: a read from
-a hard negative (same domain, different gene) then maps to its own gene and
-is dropped, instead of being forced onto the nearest annotated family or
-passed to translated search, where those reads are the main source of false
-positives.
+Every catalog gene is indexed by default, so a read from any gene maps to
+its own gene (competitive mapping, as Cayman does). With index="hits" only
+genes with an HMM hit are indexed, sub-GA homologs included on purpose: a
+read from a hard negative (same domain, different gene) still maps to its
+own gene and is dropped, instead of being forced onto the nearest annotated
+family or passed to translated search, where those reads are the main
+source of false positives. A read from a gene with no hit at all can then
+only fall back.
 
 Catalog-bound by construction: above ~97% nucleotide identity only strains
 whose genes are in the catalog are seen. Everything else falls back.
@@ -54,6 +64,7 @@ log = logging.getLogger("osmotool")
 CATALOG_FNA = "catalog.fna"
 CATALOG_ANNOTATION = "catalog.annotation.tsv"
 CATALOG_META = "catalog.json"
+INDEX_META = "catalog_index.json"      # a separately built full index (index_catalog)
 
 # Aligners with bwa's CLI ("<bin> index ref", "<bin> mem -t N ref r1 [r2]")
 # and SAM output carrying NM. Index file suffixes differ, so the catalog
@@ -73,6 +84,7 @@ ALIGNERS = {
 }
 
 ANNOTATED, HOMOLOG, DECOY = "annotated", "homolog", "decoy"
+BACKGROUND = "background"   # indexed gene without any HMM hit
 
 # Bacterial/archaeal code (NCBI table 11); only the amino acids matter here.
 _BASES = "TCAG"
@@ -195,6 +207,7 @@ def build_catalog(
     evalue: float = 1e-5,
     aligner: str = DEFAULT_ALIGNER,
     aligner_bin: str | None = None,
+    index: str = "all",
 ) -> Path:
     """
     Annotate a nucleotide gene catalog once with the release's HMMs and write
@@ -211,7 +224,15 @@ def build_catalog(
               module docstring for why.
     aligner, aligner_bin: which bwa-style aligner indexes the catalog
               (ALIGNERS); aligner_bin overrides the executable.
+    index:    "all" (default) indexes the input genes as they are, every gene
+              competing for reads, without copying the FASTA; "hits" indexes
+              only the genes with an HMM hit (much smaller, so it can ship with
+              a release, but reads from other genes can only fall back);
+              "none" writes the annotation only, to be used with a full index
+              built separately by index_catalog (profile --catalog_index).
     """
+    if index not in ("all", "hits", "none"):
+        raise ValueError(f"index must be 'all', 'hits' or 'none', not {index!r}")
     if aligner not in ALIGNERS:
         raise ValueError(f"Unknown aligner {aligner!r}: expected one of {', '.join(ALIGNERS)}")
     aligner_bin = aligner_bin or ALIGNERS[aligner]["bin"]
@@ -255,13 +276,18 @@ def build_catalog(
     hits = parse_domtblout(domtbl)
     decisions = {g: assign_gene(h, ga, decoy_models) for g, h in hits.items()}
 
-    # --- nucleotide sequences of every gene with a hit ---
-    fna = out_dir / CATALOG_FNA
-    with open(fna, "w") as out:
+    # --- lengths of the hit genes (and, for index="hits", their sequences) ---
+    fna = out_dir / CATALOG_FNA          # index prefix; a FASTA only for "hits"
+    out = open(fna, "w") if index == "hits" else None
+    try:
         for gid, seq in iter_fasta(genes):
             if gid in decisions:
                 gene_len[gid] = len(seq)
-                out.write(f">{gid}\n{seq}\n")
+                if out is not None:
+                    out.write(f">{gid}\n{seq}\n")
+    finally:
+        if out is not None:
+            out.close()
     missing = set(decisions) - set(gene_len)
     if missing:
         raise ValueError(f"{len(missing)} protein IDs have no gene in {genes}, e.g. "
@@ -283,11 +309,16 @@ def build_catalog(
             out.write(f"{gid}\t{d['label']}\t{d['status']}\t{gene_len[gid]}\t{start}\t{end}\t"
                       f"{d['score']}\t{d['best_model']}\t{d['best_score']}\n")
 
-    # --- bwa index ---
-    log.info("Indexing %d catalog genes with %s", len(decisions), aligner_bin)
-    if subprocess.run([aligner_bin, "index", str(fna)], stdout=subprocess.DEVNULL,
-                      stderr=subprocess.DEVNULL).returncode != 0:
-        raise RuntimeError(f"{aligner_bin} index failed")
+    # --- aligner index ---
+    n_indexed = {"hits": len(decisions), "all": n_genes, "none": 0}[index]
+    if index != "none":
+        target = fna if index == "hits" else Path(genes)
+        log.info("Indexing %d catalog genes (%s) with %s", n_indexed, index, aligner_bin)
+        if subprocess.run([aligner_bin, "index", "-p", str(fna), str(target)],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+            raise RuntimeError(f"{aligner_bin} index failed")
+    if index == "hits":
+        fna.unlink(missing_ok=True)      # the index holds the sequences (.pac)
 
     from osmotool import __version__
     meta = {
@@ -297,9 +328,12 @@ def build_catalog(
         "hmm_db": str(hmm_db),
         "hmm_sha256": sha256_of(hmm_db),
         "genes": str(genes),
+        "genes_sha256": sha256_of(genes),
         "proteins": str(proteins) if proteins is not None else "",
         "n_genes_input": n_genes,
-        "n_genes_kept": len(decisions),
+        "n_genes_annotated_or_hit": len(decisions),
+        "index": index,
+        "n_genes_indexed": n_indexed,
         "min_protein_length": min_protein_length,
         "hmmsearch_evalue": evalue,
         "aligner": aligner,
@@ -333,33 +367,104 @@ class Catalog:
     genes: dict[str, CatalogGene]
     meta: dict = field(default_factory=dict)
     aligner_bin: str = ALIGNERS[DEFAULT_ALIGNER]["bin"]
+    index_kind: str = "all"          # all | hits: which genes the index holds
+
+
+def index_catalog(
+    genes: str | Path,
+    out_dir: str | Path,
+    *,
+    aligner: str = DEFAULT_ALIGNER,
+    aligner_bin: str | None = None,
+) -> Path:
+    """
+    The full, competitive index of a catalog's genes, built separately from
+    its annotation. It depends only on the gene file and the aligner, not on
+    an osmo_refdb release, so one index serves every release whose catalog
+    was annotated from the same gene file (profile --catalog NAME
+    --catalog_index DIR; checked through the gene file's checksum). Writes
+    the index (prefix catalog.fna) and catalog_index.json.
+    """
+    if aligner not in ALIGNERS:
+        raise ValueError(f"Unknown aligner {aligner!r}: expected one of {', '.join(ALIGNERS)}")
+    aligner_bin = aligner_bin or ALIGNERS[aligner]["bin"]
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    n_genes = sum(1 for _ in iter_fasta(genes))
+    log.info("Indexing %d catalog genes with %s", n_genes, aligner_bin)
+    if subprocess.run([aligner_bin, "index", "-p", str(out_dir / CATALOG_FNA), str(genes)],
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+        raise RuntimeError(f"{aligner_bin} index failed")
+    from osmotool import __version__
+    meta = {
+        "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "osmotool_version": __version__,
+        "index": "all",
+        "genes": Path(genes).name,
+        "genes_sha256": sha256_of(genes),
+        "n_genes_indexed": n_genes,
+        "aligner": aligner,
+        "aligner_bin": aligner_bin,
+    }
+    (out_dir / INDEX_META).write_text(json.dumps(meta, indent=2) + "\n")
+    return out_dir
 
 
 def load_catalog(path: str | Path, *, hmm_db: str | Path | None = None,
-                 aligner_bin: str | None = None) -> Catalog:
-    """Load a build_catalog directory. With *hmm_db*, refuse a catalog that
-    was annotated with different HMMs (another release): its family calls
-    would not be this release's. Reads are mapped with the aligner that
-    built the index (catalog.json), or *aligner_bin* (same CLI and index
-    format, e.g. a reimplementation) if given."""
+                 aligner_bin: str | None = None,
+                 index_dir: str | Path | None = None) -> Catalog:
+    """Load a catalog directory (build_catalog). With *hmm_db*, refuse a
+    catalog annotated with different HMMs (another release): its family
+    calls would not be this release's.
+
+    Reads are mapped with the catalog's own index (index "all" or "hits"),
+    or with *index_dir*, a full index built by index_catalog from the same
+    gene file (refused if the checksums differ). A catalog built with index
+    "none" needs *index_dir*. The aligner is the one that built the index;
+    *aligner_bin* swaps in another executable with the same CLI and index
+    format."""
     root = Path(path)
-    fna = root / CATALOG_FNA
     meta_path = root / CATALOG_META
     if not meta_path.exists():
         raise FileNotFoundError(f"{root} is not an osmotool catalog (no {CATALOG_META}); "
                                 "build it with `osmotool build-catalog`")
     meta = json.loads(meta_path.read_text())
-    aligner = meta.get("aligner", DEFAULT_ALIGNER)
-    if aligner not in ALIGNERS:
-        raise ValueError(f"{root}: built with unknown aligner {aligner!r}")
-    missing = [p.name for p in [root / CATALOG_ANNOTATION, fna]
-               + [Path(str(fna) + s) for s in ALIGNERS[aligner]["index_suffixes"]] if not p.exists()]
-    if missing:
-        raise FileNotFoundError(f"{root} is not a complete osmotool catalog (missing "
-                                f"{', '.join(missing)}); rebuild it with `osmotool build-catalog`")
+    if not (root / CATALOG_ANNOTATION).exists():
+        raise FileNotFoundError(f"{root} has no {CATALOG_ANNOTATION}; rebuild it with "
+                                "`osmotool build-catalog`")
     if hmm_db is not None and meta.get("hmm_sha256") != sha256_of(hmm_db):
         raise ValueError(f"{root} was annotated with a different HMM database "
                          f"({meta.get('hmm_db')}) than {hmm_db}; rebuild it for this release")
+
+    if index_dir is not None:
+        index_dir = Path(index_dir)
+        imeta_path = index_dir / INDEX_META
+        if not imeta_path.exists():
+            raise FileNotFoundError(f"{index_dir} is not a catalog index (no {INDEX_META}); "
+                                    "build it with `osmotool index-catalog`")
+        imeta = json.loads(imeta_path.read_text())
+        if not meta.get("genes_sha256") or imeta.get("genes_sha256") != meta.get("genes_sha256"):
+            raise ValueError(f"{index_dir} was built from a different gene file "
+                             f"({imeta.get('genes')}) than {root} was annotated from "
+                             f"({meta.get('genes')})")
+        prefix, aligner, kind = index_dir / CATALOG_FNA, imeta.get("aligner", DEFAULT_ALIGNER), \
+            imeta.get("index", "all")
+        default_bin = imeta.get("aligner_bin")
+    else:
+        kind = meta.get("index", "hits")
+        if kind == "none":
+            raise ValueError(f"{root} ships no index (annotation only); pass the catalog's "
+                             "full index with --catalog_index (built by `osmotool index-catalog`)")
+        prefix, aligner, default_bin = root / CATALOG_FNA, meta.get("aligner", DEFAULT_ALIGNER), \
+            meta.get("aligner_bin")
+    if aligner not in ALIGNERS:
+        raise ValueError(f"{prefix.parent}: index built with unknown aligner {aligner!r}")
+    missing = [Path(str(prefix) + s).name for s in ALIGNERS[aligner]["index_suffixes"]
+               if not Path(str(prefix) + s).exists()]
+    if missing:
+        raise FileNotFoundError(f"{prefix.parent}: incomplete {aligner} index (missing "
+                                f"{', '.join(missing)})")
+
     genes: dict[str, CatalogGene] = {}
     with open(root / CATALOG_ANNOTATION) as fh:
         header = fh.readline().rstrip("\n").split("\t")
@@ -370,8 +475,8 @@ def load_catalog(path: str | Path, *, hmm_db: str | Path | None = None,
                    if f[idx["env_nt_start"]] else None)
             genes[f[idx["gene"]]] = CatalogGene(f[idx["label"]], f[idx["status"]],
                                                 int(f[idx["gene_nt"]]), env)
-    return Catalog(root=root, fna=fna, genes=genes, meta=meta,
-                   aligner_bin=aligner_bin or meta.get("aligner_bin") or ALIGNERS[aligner]["bin"])
+    return Catalog(root=root, fna=prefix, genes=genes, meta=meta, index_kind=kind,
+                   aligner_bin=aligner_bin or default_bin or ALIGNERS[aligner]["bin"])
 
 
 # ---------------------------------------------------------------------------
@@ -388,12 +493,12 @@ def norm_read_id(read_id: str) -> str:
     return MATE_SUFFIX_RE.sub("", read_id)
 
 
-def classify_alignment(fields: list[str], catalog: Catalog, *, min_identity: float,
-                       min_aligned: int, min_envelope_overlap: float = 0.5
-                       ) -> tuple[str, str, float, int]:
+def classify_placement(rname: str, pos: int, cigar: str, nm: int | None, catalog: Catalog, *,
+                       min_identity: float, min_aligned: int,
+                       min_envelope_overlap: float = 0.5) -> tuple[str, str, float, int]:
     """
-    Decision for one primary SAM record: (decision, label, identity, aligned_bp)
-    with decision call | drop | fallback (module docstring).
+    Decision for one alignment of a read: (decision, label, identity,
+    aligned_bp) with decision call | drop | fallback (module docstring).
 
     identity = 1 - NM / alignment columns (M/=/X + I + D); aligned_bp = read
     bases in the alignment (M/=/X + I). Soft clips do not count against
@@ -401,13 +506,11 @@ def classify_alignment(fields: list[str], catalog: Catalog, *, min_identity: flo
     on its aligned part as long as that is >= min_aligned bp.
     A call also needs >= min_envelope_overlap of the aligned reference span
     inside the gene's HMM envelope (reads on another domain of a multi-domain
-    gene are not the family).
+    gene are not the family). A gene missing from the annotation (whole-
+    catalog index: a gene without any HMM hit) is background.
     """
-    flag = int(fields[1])
-    if flag & 0x4:
-        return "fallback", "", 0.0, 0
     cols = aligned = ref_span = 0
-    for n, op in CIGAR_RE.findall(fields[5]):
+    for n, op in CIGAR_RE.findall(cigar):
         n = int(n)
         if op in "M=X":
             cols += n; aligned += n; ref_span += n
@@ -415,33 +518,130 @@ def classify_alignment(fields: list[str], catalog: Catalog, *, min_identity: flo
             cols += n; aligned += n
         elif op in "DN":
             cols += n; ref_span += n
-    nm = next((int(t[5:]) for t in fields[11:] if t.startswith("NM:i:")), None)
     if nm is None or cols == 0:
         return "fallback", "", 0.0, aligned
     identity = 1.0 - nm / cols
     if identity < min_identity or aligned < min_aligned:
         return "fallback", "", identity, aligned
-    gene = catalog.genes.get(fields[2])
-    if gene is None or gene.status != ANNOTATED or gene.env is None:
-        return "drop", gene.status if gene else "unknown_gene", identity, aligned
-    start = int(fields[3])
-    end = start + ref_span - 1
-    overlap = max(0, min(end, gene.env[1]) - max(start, gene.env[0]) + 1)
+    gene = catalog.genes.get(rname)
+    if gene is None:
+        return "drop", BACKGROUND, identity, aligned
+    if gene.status != ANNOTATED or gene.env is None:
+        return "drop", gene.status, identity, aligned
+    end = pos + ref_span - 1
+    overlap = max(0, min(end, gene.env[1]) - max(pos, gene.env[0]) + 1)
     if overlap < min_envelope_overlap * ref_span:
         return "drop", "outside_envelope", identity, aligned
     return "call", gene.label, identity, aligned
 
 
+def classify_alignment(fields: list[str], catalog: Catalog, *, min_identity: float,
+                       min_aligned: int, min_envelope_overlap: float = 0.5
+                       ) -> tuple[str, str, float, int]:
+    """classify_placement for a SAM record's own alignment."""
+    if int(fields[1]) & 0x4:
+        return "fallback", "", 0.0, 0
+    nm = next((int(t[5:]) for t in fields[11:] if t.startswith("NM:i:")), None)
+    return classify_placement(fields[2], int(fields[3]), fields[5], nm, catalog,
+                              min_identity=min_identity, min_aligned=min_aligned,
+                              min_envelope_overlap=min_envelope_overlap)
+
+
+def alternative_placements(fields: list[str]) -> list[tuple[str, int, str, int]]:
+    """(gene, pos, cigar, NM) of every alternative hit in the XA tag
+    ("XA:Z:gene,+pos,CIGAR,NM;..."), which bwa-style aligners write when there
+    are fewer than `mem -h` hits scoring within 80% of the best."""
+    tag = next((t[5:] for t in fields[11:] if t.startswith("XA:Z:")), "")
+    alts = []
+    for entry in tag.split(";"):
+        parts = entry.split(",")
+        if len(parts) == 4:
+            alts.append((parts[0], abs(int(parts[1])), parts[2], int(parts[3])))
+    return alts
+
+
 @dataclass
 class CatalogResult:
-    counts: dict[str, float]                  # family -> weighted reads called
+    counts: dict[str, float]                  # family -> weighted reads called (unique)
     lengths_aa: dict[str, float]              # family -> read-weighted mean gene length
     accepted: dict[int, set[str]]             # mate (0 single, 1, 2) -> normalised read IDs
+    ambiguous: dict[str, float] = field(default_factory=dict)   # family -> fractional weight
     n_reads: int = 0
     n_called: int = 0
+    n_ambiguous: int = 0
     n_dropped: int = 0
     n_fallback: int = 0
     dropped_by_reason: dict[str, int] = field(default_factory=dict)
+
+
+def settle_records(
+    sam_lines, catalog: Catalog, *, paired: bool, min_identity: float, min_aligned: int,
+    hits_out=None,
+) -> CatalogResult:
+    """
+    The catalog decision for every read in a SAM stream (primary records;
+    secondary and supplementary ones are skipped).
+
+    A read whose own alignment falls below the thresholds goes to fallback.
+    Otherwise all its valid placements are collected: its own alignment plus
+    every XA alternative that also passes min_identity / min_aligned. Each
+    placement gets a label (the family for a call, "drop" otherwise):
+      - one label: unique. A call counts *weight* for its family; a drop is
+        dropped.
+      - several labels: ambiguous. The read is settled (no fallback), and each
+        family among the labels gets weight / n_labels in `ambiguous`; the
+        drop share is discarded. Ambiguous weight is kept out of `counts`, the
+        way Cayman reports unique and combined counts separately.
+    Paired mates are judged independently and weigh 0.5 each, as count_hits.
+    *hits_out*: an open text file; every settled read is written as a TSV row
+    (read, mate, gene, decision, label, identity, aligned_bp, n_placements).
+    """
+    weight = 0.5 if paired else 1.0
+    res = CatalogResult(counts={}, lengths_aa={}, accepted={0: set(), 1: set(), 2: set()})
+    len_sum: dict[str, float] = {}
+    if hits_out is not None:
+        hits_out.write("read\tmate\tgene\tdecision\tlabel\tidentity\taligned_bp\tn_placements\n")
+    for line in sam_lines:
+        if line.startswith("@"):
+            continue
+        fields = line.rstrip("\n").split("\t")
+        flag = int(fields[1])
+        if flag & 0x900:              # secondary / supplementary
+            continue
+        res.n_reads += 1
+        mate = 1 if flag & 0x40 else 2 if flag & 0x80 else 0
+        decision, label, ident, aligned = classify_alignment(
+            fields, catalog, min_identity=min_identity, min_aligned=min_aligned)
+        if decision == "fallback":
+            res.n_fallback += 1
+            continue
+        placements = [(decision, label)]
+        for gene, pos, cigar, nm in alternative_placements(fields):
+            d, lab, _, _ = classify_placement(gene, pos, cigar, nm, catalog,
+                                              min_identity=min_identity, min_aligned=min_aligned)
+            if d != "fallback":
+                placements.append((d, lab))
+        labels = sorted({lab if d == "call" else "drop" for d, lab in placements})
+        rid = norm_read_id(fields[0])
+        res.accepted[mate].add(rid)
+        if len(labels) > 1:
+            res.n_ambiguous += 1
+            for lab in labels:
+                if lab != "drop":
+                    res.ambiguous[lab] = res.ambiguous.get(lab, 0.0) + weight / len(labels)
+            decision, label = "ambiguous", ",".join(labels)
+        elif decision == "call":
+            res.n_called += 1
+            res.counts[label] = res.counts.get(label, 0.0) + weight
+            len_sum[label] = len_sum.get(label, 0.0) + weight * catalog.genes[fields[2]].length_nt / 3
+        else:
+            res.n_dropped += 1
+            res.dropped_by_reason[label] = res.dropped_by_reason.get(label, 0) + 1
+        if hits_out is not None:
+            hits_out.write(f"{rid}\t{mate}\t{fields[2]}\t{decision}\t{label}\t"
+                           f"{ident:.4f}\t{aligned}\t{len(placements)}\n")
+    res.lengths_aa = {f: len_sum[f] / c for f, c in res.counts.items() if c}
+    return res
 
 
 def map_reads(
@@ -452,54 +652,26 @@ def map_reads(
     singles: str | None = None,
     threads: int = 4,
     min_identity: float = 0.97,
-    min_aligned: int = 60,
+    min_aligned: int = 45,
+    max_alternatives: int = 50,
     hits_out: str | Path | None = None,
 ) -> CatalogResult:
-    """Run the catalog's aligner (bwa-mem3 by default) against the catalog and classify every read's primary
-    alignment (classify_alignment). Paired mates are judged independently
-    and weigh 0.5 each, as in count_hits. With *hits_out*, every call/drop
-    is written as a TSV (read, mate, gene, decision, label, identity,
-    aligned_bp) for auditing and benchmarking."""
+    """Map reads to the catalog with its aligner (bwa-mem3 by default) and
+    settle them (settle_records). `mem -h max_alternatives` lists up to that
+    many alternative hits in XA, so ambiguity between catalog genes is seen.
+    With *hits_out*, every settled read is written as a TSV for auditing and
+    benchmarking."""
     paired = reads1 is not None and reads2 is not None
     inputs = [reads1, reads2] if paired else [singles or reads1]
-    weight = 0.5 if paired else 1.0
-    cmd = [catalog.aligner_bin, "mem", "-v", "1", "-t", str(threads), str(catalog.fna),
-           *map(str, inputs)]
+    cmd = [catalog.aligner_bin, "mem", "-v", "1", "-t", str(threads),
+           "-h", str(max_alternatives), str(catalog.fna), *map(str, inputs)]
     log.info("Mapping reads to the catalog with %s mem (min identity %.2f, >= %d bp)",
              catalog.aligner_bin, min_identity, min_aligned)
-    res = CatalogResult(counts={}, lengths_aa={}, accepted={0: set(), 1: set(), 2: set()})
-    len_sum: dict[str, float] = {}
     out_fh = open(hits_out, "w") if hits_out else None
-    if out_fh:
-        out_fh.write("read\tmate\tgene\tdecision\tlabel\tidentity\taligned_bp\n")
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1 << 20)
     try:
-        for line in proc.stdout:
-            if line.startswith("@"):
-                continue
-            fields = line.rstrip("\n").split("\t")
-            flag = int(fields[1])
-            if flag & 0x900:          # secondary / supplementary
-                continue
-            res.n_reads += 1
-            mate = 1 if flag & 0x40 else 2 if flag & 0x80 else 0
-            decision, label, ident, aligned = classify_alignment(
-                fields, catalog, min_identity=min_identity, min_aligned=min_aligned)
-            if decision == "fallback":
-                res.n_fallback += 1
-                continue
-            rid = norm_read_id(fields[0])
-            res.accepted[mate].add(rid)
-            if decision == "call":
-                res.n_called += 1
-                res.counts[label] = res.counts.get(label, 0.0) + weight
-                len_sum[label] = len_sum.get(label, 0.0) + weight * catalog.genes[fields[2]].length_nt / 3
-            else:
-                res.n_dropped += 1
-                res.dropped_by_reason[label] = res.dropped_by_reason.get(label, 0) + 1
-            if out_fh:
-                out_fh.write(f"{rid}\t{mate}\t{fields[2]}\t{decision}\t{label}\t"
-                             f"{ident:.4f}\t{aligned}\n")
+        res = settle_records(proc.stdout, catalog, paired=paired, min_identity=min_identity,
+                             min_aligned=min_aligned, hits_out=out_fh)
     finally:
         proc.stdout.close()
         rc = proc.wait()
@@ -507,9 +679,8 @@ def map_reads(
             out_fh.close()
     if rc != 0:
         raise RuntimeError(f"{catalog.aligner_bin} mem failed (exit {rc})")
-    res.lengths_aa = {f: len_sum[f] / c for f, c in res.counts.items() if c}
-    log.info("Catalog: %d reads, %d called, %d dropped (%s), %d to fallback",
-             res.n_reads, res.n_called, res.n_dropped,
+    log.info("Catalog: %d reads, %d called, %d ambiguous, %d dropped (%s), %d to fallback",
+             res.n_reads, res.n_called, res.n_ambiguous, res.n_dropped,
              ", ".join(f"{k} {v}" for k, v in sorted(res.dropped_by_reason.items())) or "none",
              res.n_fallback)
     return res

@@ -240,7 +240,7 @@ osmotool predict-nacl /path/to/osmo_refdb/releases/v10 \
 |---|---|
 | `<prefix>.gene_counts.tsv` | Per-gene raw counts and normalised value (`rpm` or `copies_per_kb`, depending on mode) |
 | `<prefix>.aln_stats.tsv` | Summary statistics |
-| `<prefix>.catalog_hits.tsv` | `profile --catalog --keep_aln` only — every catalog-settled read: gene, call/drop, label, identity, aligned bp |
+| `<prefix>.catalog_hits.tsv` | `profile --catalog --keep_aln` only — every catalog-settled read: gene, call/drop/ambiguous, label, identity, aligned bp, number of valid placements |
 | `<prefix>.unit_counts.tsv` | `profile` only, when DATABASE ships `osmo_refdb.profile_report_levels.tsv` (osmo_refdb v10+) — the counts per reporting unit, excluded units included (see [Report units](#report-units-profile-mode) below) |
 | `<prefix>.markers.tsv` | `profile` only, when DATABASE ships `markers/` — per-marker evidence behind `copies_per_genome` (see [Copies per genome](#copies-per-genome-profile-mode) below) |
 | `<prefix>.systems.tsv` | `annotate` only — multi-subunit system calls (see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only) below) |
@@ -401,29 +401,49 @@ catalog, that decision is made once, at full length, and reads are then
 assigned by near-exact nucleotide matching, the approach of catalog-based
 profilers such as Cayman:
 
-```bash
-# once per catalog and release: translate, hmmsearch with the release's HMMs
-# under their gathering cutoffs, keep every gene with a hit, index with bwa-mem3
-osmotool build-catalog releases/v10 --genes gut_catalog.fna.gz -o gut_catalog_v10 -t 32
+A release can ship catalogs under `catalogs/<name>/`: index, annotation
+and metadata built with that release's HMMs, versioned with it as one unit
+(osmo_refdb `run_pipeline.sh catalog`). Pick one by name:
 
+```bash
 # per sample: catalog first, translated search for the rest
-osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog gut_catalog_v10 -o sample
+osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog gmgc_gut -o sample
 ```
 
-- A read aligned at >= 97% nucleotide identity over >= 60 bp
-  (`--catalog_min_identity`, `--catalog_min_aligned`) is settled by its
-  gene: counted for the gene's family if it falls inside the HMM envelope, or
-  dropped if the gene is a homolog below the cutoff, an HMM decoy, or the read
-  lies on another domain. Hard-negative genes are kept in the catalog for
-  exactly this reason: their reads are recognised and dropped.
+For a catalog of your own, build it once per release (translate, hmmsearch
+with the release's HMMs under their gathering cutoffs, index the whole
+catalog with bwa-mem3) and pass its directory:
+
+```bash
+osmotool build-catalog releases/v10 --genes my_genes.fna.gz -o my_catalog_v10 -t 32
+osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog my_catalog_v10 -o sample
+```
+
+- The whole catalog is indexed (`--index all`, the default), so reads map
+  competitively against every gene, as in Cayman: a read from an unrelated
+  gene lands on its own gene instead of being forced onto a panel family.
+  `--index hits` indexes only genes with an HMM hit (sub-cutoff homologs and
+  decoys included), for a much smaller index; reads from other genes then
+  fall back.
+- A read aligned at >= 97% nucleotide identity over >= 45 bp (Cayman's
+  defaults; `--catalog_min_identity`, `--catalog_min_aligned`) is settled by
+  its gene: counted for the gene's family if it falls inside the HMM
+  envelope, or dropped if the gene has no hit (background), is a homolog
+  below the cutoff or an HMM decoy, or the read lies on another domain.
+- A read with several valid placements (alternative hits in bwa's `XA` tag
+  that also pass the thresholds) on different families is ambiguous: it is
+  settled, split equally over those families in `catalog_ambiguous`, and kept
+  out of `raw_count`.
 - Every other read goes on to DIAMOND, the cascade and the report levels, as
   without a catalog (`--catalog_only` skips that step).
-- `gene_counts.tsv` and `unit_counts.tsv` gain `catalog_count` and
-  `translated_count`; `raw_count` is their sum. A unit on `none` becomes
-  `status catalog_only`: its `catalog_count` is reported (a full-length call,
+- `gene_counts.tsv` and `unit_counts.tsv` gain `catalog_count`,
+  `catalog_ambiguous` and `translated_count`; `raw_count` is
+  `catalog_count + translated_count`. A unit on `none` becomes
+  `status catalog_only`: its catalog counts are reported (full-length calls,
   but only for strains in the catalog), `raw_count` stays NA.
 - The catalog is tied to the release whose HMMs annotated it (checked by
-  checksum) and to the aligner that indexed it (`catalog.json`). bwa-mem3 is
+  checksum) and to the aligner that indexed it (`catalog.json`). A shipped
+  catalog always matches its release. bwa-mem3 is
   the default (bioconda `bwa-mem3`; needs AVX2 on x86-64, or ARM NEON);
   `--aligner bwa` or `bwa-mem2` also work, and `--aligner_bin` points at
   another executable with the same CLI and index format.
