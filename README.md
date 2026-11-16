@@ -240,6 +240,7 @@ osmotool predict-nacl /path/to/osmo_refdb/releases/v10 \
 |---|---|
 | `<prefix>.gene_counts.tsv` | Per-gene raw counts and normalised value (`rpm` or `copies_per_kb`, depending on mode) |
 | `<prefix>.aln_stats.tsv` | Summary statistics |
+| `<prefix>.catalog_hits.tsv` | `profile --catalog --keep_aln` only — every catalog-settled read: gene, call/drop, label, identity, aligned bp |
 | `<prefix>.unit_counts.tsv` | `profile` only, when DATABASE ships `osmo_refdb.profile_report_levels.tsv` (osmo_refdb v10+) — the counts per reporting unit, excluded units included (see [Report units](#report-units-profile-mode) below) |
 | `<prefix>.markers.tsv` | `profile` only, when DATABASE ships `markers/` — per-marker evidence behind `copies_per_genome` (see [Copies per genome](#copies-per-genome-profile-mode) below) |
 | `<prefix>.systems.tsv` | `annotate` only — multi-subunit system calls (see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only) below) |
@@ -391,6 +392,49 @@ Every unit in the manifest gets a row, zeros included. Read results from this
 table; `gene_counts.tsv` is unchanged and still lists every family on its own,
 including families whose gene-level count is not reliable. The manifest's
 other columns hold the calibration numbers behind each choice.
+
+### Gene catalog (`profile --catalog`)
+
+Translated search on 150 bp reads has to tell close paralogs apart from a
+fragment, which is where it fails (see the report levels above). With a gene
+catalog, that decision is made once, at full length, and reads are then
+assigned by near-exact nucleotide matching, the approach of catalog-based
+profilers such as Cayman:
+
+```bash
+# once per catalog and release: translate, hmmsearch with the release's HMMs
+# under their gathering cutoffs, keep every gene with a hit, index with bwa-mem3
+osmotool build-catalog releases/v10 --genes gut_catalog.fna.gz -o gut_catalog_v10 -t 32
+
+# per sample: catalog first, translated search for the rest
+osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog gut_catalog_v10 -o sample
+```
+
+- A read aligned at >= 97% nucleotide identity over >= 60 bp
+  (`--catalog_min_identity`, `--catalog_min_aligned`) is settled by its
+  gene: counted for the gene's family if it falls inside the HMM envelope, or
+  dropped if the gene is a homolog below the cutoff, an HMM decoy, or the read
+  lies on another domain. Hard-negative genes are kept in the catalog for
+  exactly this reason: their reads are recognised and dropped.
+- Every other read goes on to DIAMOND, the cascade and the report levels, as
+  without a catalog (`--catalog_only` skips that step).
+- `gene_counts.tsv` and `unit_counts.tsv` gain `catalog_count` and
+  `translated_count`; `raw_count` is their sum. A unit on `none` becomes
+  `status catalog_only`: its `catalog_count` is reported (a full-length call,
+  but only for strains in the catalog), `raw_count` stays NA.
+- The catalog is tied to the release whose HMMs annotated it (checked by
+  checksum) and to the aligner that indexed it (`catalog.json`). bwa-mem3 is
+  the default (bioconda `bwa-mem3`; needs AVX2 on x86-64, or ARM NEON);
+  `--aligner bwa` or `bwa-mem2` also work, and `--aligner_bin` points at
+  another executable with the same CLI and index format.
+- Catalog-bound: above 97% identity only strains whose genes are in the
+  catalog are seen. That suits well-catalogued communities such as the human
+  gut; for environmental and halophile samples most reads fall back to
+  translated search.
+- Accuracy is that of the full-length annotation (`annotate --method hmm`),
+  including its errors: paralogs the HMMs confuse at full length (e.g. some
+  opu permeases) and genes just below a gathering cutoff are not fixed by the
+  catalog.
 
 ### `gene_coordinates.tsv` format (`annotate` mode only)
 

@@ -8,6 +8,7 @@ dependencies:
   - prodigal>=2.6
   - hmmer>=3.3
   - orfm>=0.7
+  - bwa-mem3        # profile --catalog / build-catalog (bwa and bwa-mem2 also work)
   - pandas>=1.5
   - xgboost>=3.1   # NaCl-max prediction (annotate --predict_nacl, predict-nacl)
   - pip

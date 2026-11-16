@@ -31,6 +31,7 @@ def write_gene_counts(
     copies_per_genome: dict[str, float | None] | None = None,
     assembly_stats: AssemblyStats | None = None,
     proteins_with_hits: int | None = None,
+    count_sources: dict[str, tuple[float, float]] | None = None,
 ) -> Path:
     """
     Write ``<out_prefix>.gene_counts.tsv``.
@@ -57,6 +58,10 @@ def write_gene_counts(
         the first one: ``# genome_bp``, ``# gc`` (5 decimals, or ``NA`` if
         the assembly has no A/C/G/T), ``# n_contigs`` and ``# contig_n50``.
         ``profile`` leaves this None, so its output is unchanged.
+    count_sources:
+        ``profile --catalog`` only: {family: (catalog_count, translated_count)};
+        adds those two columns after the normalised value (raw_count is
+        their sum). Omitted (None) leaves the file unchanged.
     proteins_with_hits:
         ``annotate`` mode only. When given, written as
         ``# proteins_with_hits`` directly after ``# filtered_reads``. It is
@@ -84,14 +89,18 @@ def write_gene_counts(
         fh.write(f"# filtered_reads\t{filtered_reads}\n")
         if proteins_with_hits is not None:
             fh.write(f"# proteins_with_hits\t{proteins_with_hits}\n")
+        src_col = "\tcatalog_count\ttranslated_count" if count_sources is not None else ""
         extra_col = "\tcopies_per_genome" if copies_per_genome is not None else ""
-        fh.write(f"gene\traw_count\t{norm_col}{extra_col}\n")
+        fh.write(f"gene\traw_count\t{norm_col}{src_col}{extra_col}\n")
         for fam in families:
             raw = counts.get(fam, 0.0)
             norm = normalised.get(fam, 0.0)
             extra = ""
+            if count_sources is not None:
+                c, t = count_sources.get(fam, (0.0, 0.0))
+                extra += f"\t{c:.1f}\t{t:.1f}"
             if copies_per_genome is not None:
-                extra = "\t" + _fmt_optional(copies_per_genome.get(fam))
+                extra += "\t" + _fmt_optional(copies_per_genome.get(fam))
             fh.write(f"{fam}\t{raw:.1f}\t{norm:.6g}{extra}\n")
 
     log.info("Wrote gene counts → %s", out_path)
@@ -114,6 +123,7 @@ def write_unit_counts(
     filtered_reads: int,
     report_levels: str | Path,
     with_copies: bool = False,
+    with_sources: bool = False,
 ) -> Path:
     """
     Write ``<out_prefix>.unit_counts.tsv``: gene_counts.tsv summed to the
@@ -132,20 +142,31 @@ def write_unit_counts(
     Every unit in the manifest has a row, zeros included. Excluded units
     carry NA, never 0: they were not reliable at any level, so the table
     says nothing about whether those genes are there.
+
+    with_sources (``profile --catalog``) adds catalog_count and
+    translated_count after RPM. An excluded unit then has status
+    catalog_only: its catalog_count is reported (full-length annotation, so
+    reliable, but only for strains in the catalog), raw_count stays NA.
     """
     out_path = Path(str(out_prefix) + ".unit_counts.tsv")
     with open(out_path, "w") as fh:
         fh.write(f"# total_reads\t{total_reads}\n")
         fh.write(f"# filtered_reads\t{filtered_reads}\n")
         fh.write(f"# report_levels\t{report_levels}\n")
+        src_col = "\tcatalog_count\ttranslated_count" if with_sources else ""
         extra_col = "\tcopies_per_genome" if with_copies else ""
-        fh.write(f"unit\treport_level\tmembers\tstatus\traw_count\tRPM{extra_col}\n")
+        fh.write(f"unit\treport_level\tmembers\tstatus\traw_count\tRPM{src_col}{extra_col}\n")
+
+        def count(x):
+            return "NA" if x is None else f"{x:.1f}"
         for r in rows:
-            raw = "NA" if r["raw_count"] is None else f"{r['raw_count']:.1f}"
-            norm = _fmt_optional(r["rpm"])
-            extra = "\t" + _fmt_optional(r["copies_per_genome"]) if with_copies else ""
+            extra = ""
+            if with_sources:
+                extra += f"\t{count(r.get('catalog_count'))}\t{count(r.get('translated_count'))}"
+            if with_copies:
+                extra += "\t" + _fmt_optional(r["copies_per_genome"])
             fh.write(f"{r['unit']}\t{r['report_level'] or 'NA'}\t{','.join(r['members'])}\t"
-                     f"{r['status']}\t{raw}\t{norm}{extra}\n")
+                     f"{r['status']}\t{count(r['raw_count'])}\t{_fmt_optional(r['rpm'])}{extra}\n")
     log.info("Wrote unit counts → %s", out_path)
     return out_path
 

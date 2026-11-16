@@ -56,6 +56,7 @@ from osmotool.output import (
 )
 from osmotool.systems import detect_systems, DEFAULT_SYSTEMS, load_systems_config
 from osmotool.utils import resolve_out_prefix, check_tool, MarkerDb
+from osmotool.catalog import Catalog, map_reads, write_fallback_fastq
 
 log = logging.getLogger("osmotool")
 
@@ -86,6 +87,10 @@ def run_profile(
     markers: MarkerDb | None = None,
     train_refs: str | None = None,
     report_levels: str | None = None,
+    catalog: Catalog | None = None,
+    catalog_min_identity: float = 0.97,
+    catalog_min_aligned: int = 60,
+    translated_fallback: bool = True,
 ) -> tuple[Path, Path]:
     """
     Profile FASTQ reads against the osmodiamond database.
@@ -131,6 +136,19 @@ def run_profile(
         near-universal housekeeping gene with no osmoadaptation-specific
         signal at the read level). Those families are still searched
         normally; this only drops them from the reported gene_counts.tsv.
+    catalog, catalog_min_identity, catalog_min_aligned, translated_fallback:
+        Catalog-based assignment first (see catalog.py; built once with
+        `osmotool build-catalog`). Reads are mapped with the catalog's
+        aligner (bwa-mem3 by default); a read aligned at >=
+        catalog_min_identity over >= catalog_min_aligned bp is settled by
+        the catalog's full-length HMM annotation -- counted for that family
+        if it lies in the gene's HMM envelope, dropped otherwise (homolog
+        below GA, HMM decoy, other domain). Only the remaining reads go to
+        DIAMOND and the cascade, unless translated_fallback is False
+        (catalog-only, e.g. a gut cohort with a matching catalog). Counts
+        are the sum of both; gene_counts.tsv and unit_counts.tsv show
+        catalog_count and translated_count separately. Markers always see
+        all reads.
     report_levels:
         Optional path to osmo_refdb's <release>.profile_report_levels.tsv
         (v10 and later): the level at which each family is reliable on
@@ -170,39 +188,82 @@ def run_profile(
         total_reads = count_reads(reads1, reads2, singles)
     log.info("  total reads: %d", total_reads)
 
+    # --- catalog first: settle every read the catalog can (catalog.py) ---
+    # t_reads* are what the translated search sees: all reads, or only the
+    # ones the catalog did not settle.
+    t_reads1, t_reads2, t_singles = reads1, reads2, singles
+    cat = None
+    fallback_files: list[Path] = []
+    if catalog is not None:
+        check_tool(catalog.aligner_bin)
+        cat = map_reads(
+            catalog, reads1=reads1, reads2=reads2, singles=singles, threads=threads,
+            min_identity=catalog_min_identity, min_aligned=catalog_min_aligned,
+            hits_out=Path(str(out_prefix) + ".catalog_hits.tsv") if keep_aln else None,
+        )
+        if translated_fallback:
+            if paired:
+                pairs = ((reads1, 1, "_R1"), (reads2, 2, "_R2"))
+            else:
+                pairs = ((singles or reads1, 0, ""),)
+            subsets = []
+            for src, mate, tag in pairs:
+                dest = Path(str(out_prefix) + f".catalog_fallback{tag}.fastq")
+                write_fallback_fastq(src, cat.accepted[mate], dest)
+                fallback_files.append(dest)
+                subsets.append(str(dest))
+            if paired:
+                t_reads1, t_reads2 = subsets
+            elif singles is not None:
+                t_singles = subsets[0]
+            else:
+                t_reads1 = subsets[0]
+
     # --- run DIAMOND blastx ---
     aln_file = Path(str(out_prefix) + ".blastx.tsv")
-    run_diamond_blastx(
-        db,
-        aln_file,
-        reads1=reads1,
-        reads2=reads2,
-        singles=singles,
-        min_identity=min_identity,
-        min_query_cover=min_query_cover,
-        min_seqlen=min_seqlen,
-        evalue=evalue,
-        threads=threads,
-        tmpdir=tmpdir,
-    )
-
-    # --- parse alignments & best-hit selection ---
-    alignments = list(parse_diamond_output(aln_file, min_subject_cover=min_subject_cover))
-    filtered_reads = len({row["qseqid"] for row in alignments})
-    best_hits = select_best_hits(iter(alignments))
-
-    # --- DIAMOND+HMM cascade: second opinion for reads on flagged families ---
-    if cascade_config is not None:
-        best_hits = _apply_profile_cascade(
-            best_hits, reads1, reads2, singles, hmm_db, cascade_config,
-            out_prefix, threads, keep_aln,
+    best_hits: dict[str, dict] = {}
+    filtered_reads = 0
+    if catalog is None or translated_fallback:
+        run_diamond_blastx(
+            db,
+            aln_file,
+            reads1=t_reads1,
+            reads2=t_reads2,
+            singles=t_singles,
+            min_identity=min_identity,
+            min_query_cover=min_query_cover,
+            min_seqlen=min_seqlen,
+            evalue=evalue,
+            threads=threads,
+            tmpdir=tmpdir,
         )
+
+        # --- parse alignments & best-hit selection ---
+        alignments = list(parse_diamond_output(aln_file, min_subject_cover=min_subject_cover))
+        filtered_reads = len({row["qseqid"] for row in alignments})
+        best_hits = select_best_hits(iter(alignments))
+
+        # --- DIAMOND+HMM cascade: second opinion for reads on flagged families ---
+        if cascade_config is not None:
+            best_hits = _apply_profile_cascade(
+                best_hits, t_reads1, t_reads2, t_singles, hmm_db, cascade_config,
+                out_prefix, threads, keep_aln,
+            )
 
     # --- counting & RPM ---
     counts = count_hits(best_hits, paired=paired)
+    sources = None
+    if cat is not None:
+        translated = counts
+        families = set(translated) | set(cat.counts)
+        counts = {f: translated.get(f, 0.0) + cat.counts.get(f, 0.0) for f in families}
+        sources = {f: (cat.counts.get(f, 0.0), translated.get(f, 0.0)) for f in families}
+        filtered_reads += cat.n_called
     if exclude_families is not None:
         excluded = load_excluded_families(exclude_families)
         counts = {fam: cnt for fam, cnt in counts.items() if fam not in excluded}
+        if sources is not None:
+            sources = {f: v for f, v in sources.items() if f not in excluded}
     rpm = compute_rpm(counts, total_reads)
 
     # --- copies per genome, via universal single-copy markers ---
@@ -215,6 +276,8 @@ def run_profile(
             min_identity=min_identity, min_query_cover=min_query_cover,
             min_subject_cover=min_subject_cover, min_seqlen=min_seqlen,
             evalue=evalue, threads=threads, tmpdir=tmpdir,
+            catalog_counts=cat.counts if cat is not None else None,
+            catalog_lengths=cat.lengths_aa if cat is not None else None,
         )
 
     # --- write outputs ---
@@ -224,14 +287,17 @@ def run_profile(
         filtered_reads=filtered_reads,
         normalisation="rpm",
         copies_per_genome=copies,
+        count_sources=sources,
     )
     unit_stats = {}
     if report_levels is not None:
-        unit_rows = aggregate_report_units(load_report_levels(report_levels), counts, rpm, copies)
+        unit_rows = aggregate_report_units(load_report_levels(report_levels), counts, rpm, copies,
+                                           sources=sources)
         write_unit_counts(
             out_prefix, unit_rows,
             total_reads=total_reads, filtered_reads=filtered_reads,
             report_levels=report_levels, with_copies=copies is not None,
+            with_sources=sources is not None,
         )
         unit_stats = {
             "report_levels": str(report_levels),
@@ -249,17 +315,35 @@ def run_profile(
         min_subject_cover=min_subject_cover,
         evalue=evalue,
         note_systems=PROFILE_SYSTEMS_NOTE,
-        extra={**(marker_stats or {}), **unit_stats} or None,
+        extra={**(marker_stats or {}), **unit_stats, **_catalog_stats(catalog, cat,
+               translated_fallback)} or None,
     )
     stats_path = write_aln_stats(out_prefix, stats)
 
     if not keep_aln:
         aln_file.unlink(missing_ok=True)
+        for f in fallback_files:
+            f.unlink(missing_ok=True)
     else:
         log.info("Alignment file retained: %s", aln_file)
 
     log.info("profile complete: %s  %s", counts_path, stats_path)
     return counts_path, stats_path
+
+
+def _catalog_stats(catalog: Catalog | None, cat, translated_fallback: bool) -> dict:
+    if catalog is None:
+        return {}
+    return {
+        "catalog": str(catalog.root),
+        "catalog_aligner": catalog.aligner_bin,
+        "catalog_reads_called": cat.n_called,
+        "catalog_reads_dropped": cat.n_dropped,
+        "catalog_dropped_by_reason": ",".join(f"{k}:{v}" for k, v in
+                                              sorted(cat.dropped_by_reason.items())) or "none",
+        "catalog_reads_fallback": cat.n_fallback,
+        "translated_fallback": "yes" if translated_fallback else "no",
+    }
 
 
 def _normalise_to_markers(
@@ -281,6 +365,8 @@ def _normalise_to_markers(
     evalue: float,
     threads: int,
     tmpdir: str | None,
+    catalog_counts: dict[str, float] | None = None,
+    catalog_lengths: dict[str, float] | None = None,
 ) -> tuple[dict[str, float | None], dict]:
     """Second DIAMOND pass against the marker db and the copies-per-genome
     computation (see normalise.py). Markers get exactly the same alignment
@@ -319,6 +405,14 @@ def _normalise_to_markers(
         log.info("Marker normalisation: outlier markers excluded: %s", ", ".join(estimate.outliers))
 
     osmo_len = reference_lengths(best_hits, parse_protein_lengths(train_refs))
+    # Catalog-settled reads carry their catalog gene's length instead; the
+    # family length is the read-weighted mean over both sources.
+    for fam, cat_len in (catalog_lengths or {}).items():
+        n_cat = (catalog_counts or {}).get(fam, 0.0)
+        n_tr = counts.get(fam, 0.0) - n_cat
+        tr_len = osmo_len.get(fam)
+        osmo_len[fam] = ((n_cat * cat_len + n_tr * tr_len) / (n_cat + n_tr)
+                         if tr_len and n_tr > 0 else cat_len)
     osmo_rpk = compute_rpk(counts, osmo_len, read_length, min_query_cover)
     copies = copies_per_genome(osmo_rpk, estimate.coverage_rpk)
 
