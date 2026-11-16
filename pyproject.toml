@@ -14,9 +14,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# NaCl-max prediction (annotate --predict_nacl, predict-nacl)
+predict = [
+    "xgboost>=3.1",
+    "numpy",
+]
 dev = [
     "pytest>=7",
     "pytest-cov",
+    "xgboost>=3.1",
+    "numpy",
 ]
 
 [project.scripts]
