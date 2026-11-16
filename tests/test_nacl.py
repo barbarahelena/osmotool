@@ -86,9 +86,10 @@ def model_dir(tmp_path: Path) -> Path:
                          rng.integers(1, 300, n), rng.integers(0, 4, n),
                          rng.integers(0, 2, n), rng.integers(0, 2, n)]).astype(float)
     y = 2 + 2.5 * X[:, 3] + 3 * X[:, 4] + rng.normal(0, 0.5, n)
-    m = xgb.XGBRegressor(n_estimators=20, max_depth=3, random_state=0).fit(X, y)
-    b = m.get_booster()
-    b.feature_names = FEATURES
+    # xgboost's native API: XGBRegressor would need scikit-learn, which
+    # neither osmotool nor its [dev] extra installs (CI has no sklearn)
+    b = xgb.train({"max_depth": 3, "seed": 0, "objective": "reg:squarederror"},
+                  xgb.DMatrix(X, label=y, feature_names=FEATURES), num_boost_round=20)
     d = tmp_path / "vTest" / "nacl_model"
     d.mkdir(parents=True)
     b.save_model(str(d / "nacl_max.xgb.json"))
