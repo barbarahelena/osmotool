@@ -15,13 +15,13 @@ assigned by near-exact nucleotide matching (bwa-mem3 mem by default) to those ge
                       catalog.annotation.tsv (the hit genes), catalog.json
   map_reads           reads -> per-read catalog decisions:
                         call      primary alignment >= min_identity over
-                                  >= min_aligned bp, on an annotated gene,
-                                  inside its HMM envelope
+                                  >= min_aligned bp, anywhere on an annotated
+                                  gene (on a fused gene, the family whose
+                                  envelope holds the read)
                         drop      same alignment quality, but on a gene the
                                   full-length HMMs did NOT assign (background
                                   gene without a hit, homolog below GA, HMM
-                                  decoy), or outside the envelope:
-                                  confidently not that family
+                                  decoy): confidently not that family
                         ambiguous several placements pass the thresholds
                                   (XA tag) and disagree on the label: settled
                                   (no fallback) but counted separately,
@@ -168,30 +168,35 @@ def parse_domtblout(path: str | Path) -> dict[str, dict[str, dict]]:
 def assign_gene(hits: dict[str, dict], ga: dict[str, tuple[float, float]],
                 decoys: set[str]) -> dict:
     """The full-length decision for one gene, as annotate --method hmm makes
-    it: keep the models whose sequence score reaches GA1 with at least one
-    domain reaching GA2 (= hmmsearch --cut_ga), then the best one by score
-    (ties: lower E-value, then name, as quantifier.select_best_hits). A
-    decoy model winning marks the gene a decoy; no model passing marks it a
-    homolog (below GA). The envelope is the span of the winning model's
-    domains that reach GA2 (nucleotide coordinates are derived later)."""
+    it: keep the models whose *sequence* score reaches GA1, then the best one
+    by score (ties: lower E-value, then name, as quantifier.select_best_hits).
+    That is what annotate gets from hmmsearch --cut_ga's per-sequence table:
+    a sequence at or above GA1 is reported there even when no single domain
+    reaches GA2 (a hit split into two domains, each below the cutoff), and
+    osmo_refdb calibrates GA on the full-sequence score. A decoy model
+    winning marks the gene a decoy; no model passing marks it a homolog
+    (below GA). Envelopes are the span of a model's domains (amino acids;
+    nucleotide coordinates are derived later): env_aa for the winner,
+    others for every other non-decoy model that also passes, which on a
+    fused gene (e.g. mrpA-mrpB) mark the other family's region."""
     passing = []
     for model, h in hits.items():
-        if model not in ga:
-            continue
-        ga1, ga2 = ga[model]
-        good = [d for d in h["domains"] if d[2] >= ga2]
-        if h["score"] >= ga1 and good:
-            passing.append((-h["score"], h["evalue"], model, good))
+        if model in ga and h["score"] >= ga[model][0] and h["domains"]:
+            passing.append((-h["score"], h["evalue"], model))
     best_any = min(hits.items(), key=lambda kv: (-kv[1]["score"], kv[1]["evalue"], kv[0]))
     if not passing:
         return {"label": "", "status": HOMOLOG, "score": "",
                 "best_model": best_any[0], "best_score": best_any[1]["score"],
-                "env_aa": None}
-    _, _, model, good = min(passing)
-    env = (min(d[0] for d in good), max(d[1] for d in good))
+                "env_aa": None, "others": []}
+
+    def span(model):
+        doms = hits[model]["domains"]
+        return (min(d[0] for d in doms), max(d[1] for d in doms))
+    _, _, model = min(passing)
+    others = [(m, span(m)) for _, _, m in sorted(passing) if m != model and m not in decoys]
     return {"label": model, "status": DECOY if model in decoys else ANNOTATED,
             "score": hits[model]["score"], "best_model": best_any[0],
-            "best_score": best_any[1]["score"], "env_aa": env}
+            "best_score": best_any[1]["score"], "env_aa": span(model), "others": others}
 
 
 def build_catalog(
@@ -297,7 +302,7 @@ def build_catalog(
     by_label: dict[str, int] = {}
     with open(out_dir / CATALOG_ANNOTATION, "w") as out:
         out.write("gene\tlabel\tstatus\tgene_nt\tenv_nt_start\tenv_nt_end\tscore\t"
-                  "best_model\tbest_score\n")
+                  "best_model\tbest_score\tother_envelopes\n")
         for gid in sorted(decisions):
             d = decisions[gid]
             if d["env_aa"] is None:
@@ -306,8 +311,10 @@ def build_catalog(
                 start, end = (d["env_aa"][0] - 1) * 3 + 1, min(d["env_aa"][1] * 3, gene_len[gid])
             key = d["label"] if d["status"] == ANNOTATED else d["status"]
             by_label[key] = by_label.get(key, 0) + 1
+            others = ",".join(f"{m}:{(a - 1) * 3 + 1}-{min(b * 3, gene_len[gid])}"
+                              for m, (a, b) in d.get("others", []))
             out.write(f"{gid}\t{d['label']}\t{d['status']}\t{gene_len[gid]}\t{start}\t{end}\t"
-                      f"{d['score']}\t{d['best_model']}\t{d['best_score']}\n")
+                      f"{d['score']}\t{d['best_model']}\t{d['best_score']}\t{others}\n")
 
     # --- aligner index ---
     n_indexed = {"hits": len(decisions), "all": n_genes, "none": 0}[index]
@@ -358,6 +365,7 @@ class CatalogGene:
     status: str           # annotated | homolog | decoy
     length_nt: int
     env: tuple[int, int] | None   # 1-based inclusive nucleotide envelope
+    others: tuple[tuple[str, int, int], ...] = ()   # other passing families' envelopes
 
 
 @dataclass
@@ -473,8 +481,16 @@ def load_catalog(path: str | Path, *, hmm_db: str | Path | None = None,
             f = line.rstrip("\n").split("\t")
             env = ((int(f[idx["env_nt_start"]]), int(f[idx["env_nt_end"]]))
                    if f[idx["env_nt_start"]] else None)
+            others = ()
+            if "other_envelopes" in idx and len(f) > idx["other_envelopes"] and f[idx["other_envelopes"]]:
+                parsed = []
+                for item in f[idx["other_envelopes"]].split(","):
+                    fam, rng = item.rsplit(":", 1)
+                    a, b = rng.split("-")
+                    parsed.append((fam, int(a), int(b)))
+                others = tuple(parsed)
             genes[f[idx["gene"]]] = CatalogGene(f[idx["label"]], f[idx["status"]],
-                                                int(f[idx["gene_nt"]]), env)
+                                                int(f[idx["gene_nt"]]), env, others)
     return Catalog(root=root, fna=prefix, genes=genes, meta=meta, index_kind=kind,
                    aligner_bin=aligner_bin or default_bin or ALIGNERS[aligner]["bin"])
 
@@ -504,10 +520,12 @@ def classify_placement(rname: str, pos: int, cigar: str, nm: int | None, catalog
     bases in the alignment (M/=/X + I). Soft clips do not count against
     identity: a read hanging off a gene end aligns partially, and is judged
     on its aligned part as long as that is >= min_aligned bp.
-    A call also needs >= min_envelope_overlap of the aligned reference span
-    inside the gene's HMM envelope (reads on another domain of a multi-domain
-    gene are not the family). A gene missing from the annotation (whole-
-    catalog index: a gene without any HMM hit) is background.
+    A read anywhere on an annotated gene is called as the gene's family,
+    unless >= min_envelope_overlap of its aligned span lies in the envelope
+    of another family that also passes on that gene (a fused ORF), and more
+    of it than in the gene's own envelope. A gene missing from the
+    annotation (whole-catalog index: a gene without any HMM hit) is
+    background.
     """
     cols = aligned = ref_span = 0
     for n, op in CIGAR_RE.findall(cigar):
@@ -528,10 +546,20 @@ def classify_placement(rname: str, pos: int, cigar: str, nm: int | None, catalog
         return "drop", BACKGROUND, identity, aligned
     if gene.status != ANNOTATED or gene.env is None:
         return "drop", gene.status, identity, aligned
+    # The whole gene is the family, as in translated search (a read anywhere
+    # on the protein counts): the HMM envelope is usually narrower than the
+    # gene, because the models are built from trimmed alignments. Only on a
+    # gene where another family also passes GA (a fused ORF) does a read
+    # lying mostly in that family's envelope go to it instead.
     end = pos + ref_span - 1
-    overlap = max(0, min(end, gene.env[1]) - max(pos, gene.env[0]) + 1)
-    if overlap < min_envelope_overlap * ref_span:
-        return "drop", "outside_envelope", identity, aligned
+
+    def overlap(a: int, b: int) -> int:
+        return max(0, min(end, b) - max(pos, a) + 1)
+    own = overlap(*gene.env)
+    for fam, a, b in gene.others:
+        o = overlap(a, b)
+        if o >= min_envelope_overlap * ref_span and o > own:
+            return "call", fam, identity, aligned
     return "call", gene.label, identity, aligned
 
 

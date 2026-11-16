@@ -47,6 +47,12 @@ DOMTBL = (
     "g2 - 150 ectA - 180 1e-6 22.0 0.1 1 1 1e-7 1e-7 21.0 0.1 1 90 10 100 8 104 0.9 -\n"
     "g3 - 300 pep_decoy - 250 1e-40 200.0 0.1 1 1 1e-41 1e-41 199.0 0.1 1 250 2 260 1 262 0.9 -\n"
     "g3 - 300 ectA - 180 1e-20 90.0 0.1 1 1 1e-21 1e-21 89.0 0.1 1 180 2 182 1 185 0.9 -\n"
+    # g4: ectA split into two domains, each below GA 25 but the sequence above it
+    "g4 - 400 ectA - 180 1e-12 40.0 0.1 1 2 1e-8 1e-8 21.0 0.1 1 90 5 95 5 98 0.9 -\n"
+    "g4 - 400 ectA - 180 1e-12 40.0 0.1 2 2 1e-8 1e-8 19.0 0.1 91 180 200 300 199 305 0.9 -\n"
+    # g5: fused ORF, ectA and ectB both pass in different regions
+    "g5 - 600 ectA - 180 1e-30 100.0 0.1 1 1 1e-31 1e-31 99.0 0.1 1 180 1 190 1 200 0.9 -\n"
+    "g5 - 600 ectB - 300 1e-25 80.0 0.1 1 1 1e-26 1e-26 79.0 0.1 1 300 260 580 255 590 0.9 -\n"
 )
 GA = {"ectA": (25.0, 20.0), "ectB": (30.0, 30.0), "pep_decoy": (30.0, 30.0)}
 
@@ -61,6 +67,10 @@ def test_parse_and_assign(tmp_path: Path):
     assert a2["status"] == HOMOLOG and a2["label"] == "" and a2["best_model"] == "ectA"
     a3 = assign_gene(hits["g3"], GA, {"pep_decoy"})          # decoy wins the gene
     assert (a3["label"], a3["status"]) == ("pep_decoy", DECOY)
+    a4 = assign_gene(hits["g4"], GA, {"pep_decoy"})          # as hmmsearch --cut_ga's tblout
+    assert (a4["label"], a4["status"], a4["env_aa"]) == ("ectA", ANNOTATED, (5, 305))
+    a5 = assign_gene(hits["g5"], GA, {"pep_decoy"})          # fused: ectB kept as other region
+    assert a5["label"] == "ectA" and a5["others"] == [("ectB", (255, 590))]
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +84,7 @@ def _catalog() -> Catalog:
         "geneB": CatalogGene("ectB", ANNOTATED, 900, (1, 900)),
         "geneH": CatalogGene("", HOMOLOG, 600, None),
         "geneD": CatalogGene("pep_decoy", DECOY, 900, (1, 900)),
+        "geneF": CatalogGene("ectA", ANNOTATED, 1800, (1, 600), (("ectB", 765, 1770),)),
     })
 
 
@@ -92,8 +103,10 @@ def _sam(rname="geneA", pos=100, cigar="150M", nm=1, flag=0, xa=None, qname="r1"
     (_sam(rname="geneH"), "drop", HOMOLOG),
     (_sam(rname="geneD"), "drop", DECOY),
     (_sam(rname="geneX"), "drop", BACKGROUND),                 # indexed, no HMM hit
-    (_sam(pos=500), "drop", "outside_envelope"),               # 500-649 vs env ..540
-    (_sam(pos=430), "call", "ectA"),                           # 430-579: 111 of 150 inside
+    (_sam(pos=500), "call", "ectA"),                           # past the envelope: whole gene counts
+    (_sam(rname="geneF", pos=900), "call", "ectB"),            # fused gene: in ectB's region
+    (_sam(rname="geneF", pos=100), "call", "ectA"),
+    (_sam(rname="geneF", pos=620), "call", "ectA"),            # between regions: the gene's family
     (_sam(flag=4, rname="*"), "fallback", ""),
 ])
 def test_classify_alignment(fields, decision, label):
@@ -130,9 +143,9 @@ def _catalog_dir(tmp_path: Path, aligner="bwa-mem3", hmm_sha="abc", index="all",
         for suf in ALIGNERS[aligner]["index_suffixes"]:
             (tmp_path / f"catalog.fna{suf}").write_text("")
     (tmp_path / "catalog.annotation.tsv").write_text(
-        "gene\tlabel\tstatus\tgene_nt\tenv_nt_start\tenv_nt_end\tscore\tbest_model\tbest_score\n"
-        "geneA\tectA\tannotated\t600\t31\t540\t120.0\tectA\t120.0\n"
-        "geneH\t\thomolog\t600\t\t\t\tectA\t22.0\n")
+        "gene\tlabel\tstatus\tgene_nt\tenv_nt_start\tenv_nt_end\tscore\tbest_model\tbest_score\tother_envelopes\n"
+        "geneA\tectA\tannotated\t600\t31\t540\t120.0\tectA\t120.0\tectB:301-540\n"
+        "geneH\t\thomolog\t600\t\t\t\tectA\t22.0\t\n")
     (tmp_path / "catalog.json").write_text(json.dumps(
         {"aligner": aligner, "hmm_sha256": hmm_sha, "index": index, "genes_sha256": genes_sha,
          "genes": "genes.fna.gz"}))
@@ -151,7 +164,7 @@ def _index_dir(tmp_path: Path, genes_sha="g1", aligner="bwa-mem3") -> Path:
 def test_load_catalog(tmp_path: Path):
     cat = load_catalog(_catalog_dir(tmp_path))
     assert cat.aligner_bin == "bwa-mem3"
-    assert cat.genes["geneA"] == CatalogGene("ectA", ANNOTATED, 600, (31, 540))
+    assert cat.genes["geneA"] == CatalogGene("ectA", ANNOTATED, 600, (31, 540), (("ectB", 301, 540),))
     assert cat.genes["geneH"].env is None
     assert load_catalog(tmp_path, aligner_bin="/opt/x/bwa-mem3").aligner_bin == "/opt/x/bwa-mem3"
 

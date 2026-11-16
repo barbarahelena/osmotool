@@ -427,9 +427,12 @@ osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog my_catalog_v10 -
   fall back.
 - A read aligned at >= 97% nucleotide identity over >= 45 bp (Cayman's
   defaults; `--catalog_min_identity`, `--catalog_min_aligned`) is settled by
-  its gene: counted for the gene's family if it falls inside the HMM
-  envelope, or dropped if the gene has no hit (background), is a homolog
-  below the cutoff or an HMM decoy, or the read lies on another domain.
+  its gene: counted for the gene's family wherever it lies on the gene (on a
+  fused gene where two families pass, for the family whose region holds the
+  read), or dropped if the gene has no hit (background), is a homolog below
+  the cutoff or an HMM decoy. A gene counts as the family when its
+  full-sequence HMM score reaches the gathering cutoff, exactly as in
+  `annotate --method hmm`.
 - A read with several valid placements (alternative hits in bwa's `XA` tag
   that also pass the thresholds) on different families is ambiguous: it is
   settled, split equally over those families in `catalog_ambiguous`, and kept

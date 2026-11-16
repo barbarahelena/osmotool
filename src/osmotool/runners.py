@@ -142,9 +142,10 @@ def run_profile(
         aligner (bwa-mem3 by default); a read aligned at >=
         catalog_min_identity over >= catalog_min_aligned bp (Cayman's
         defaults: 0.97, 45) is settled by the catalog's full-length HMM
-        annotation -- counted for that family if it lies in the gene's HMM
-        envelope, dropped otherwise (background gene, homolog below GA, HMM
-        decoy, other domain), or counted as ambiguous if equally valid
+        annotation -- counted for the gene's family (on a fused gene, the
+        family whose region holds the read), dropped if the gene is not
+        assigned (background gene, homolog below GA, HMM decoy), or counted
+        as ambiguous if equally valid
         placements disagree. Only the remaining reads go to DIAMOND and the
         cascade, unless translated_fallback is False (catalog-only, e.g. a
         gut cohort with a matching catalog). raw_count is the catalog's
