@@ -24,6 +24,7 @@ from osmotool.functions import (
     parse_orf_coordinates,
     load_diamond_cutoffs,
     load_cascade_config,
+    load_report_levels,
     load_excluded_families,
     extract_fastq_subset,
     strip_orf_suffix,
@@ -38,6 +39,7 @@ from osmotool.quantifier import (
     estimate_family_lengths,
     filter_by_family_cutoff,
     apply_cascade_check,
+    aggregate_report_units,
     extract_gene_coordinates,
 )
 from osmotool.normalise import (
@@ -50,7 +52,7 @@ from osmotool.normalise import (
 )
 from osmotool.output import (
     write_gene_counts, write_aln_stats, build_aln_stats, write_system_calls,
-    write_gene_coordinates, write_marker_report, PROFILE_SYSTEMS_NOTE,
+    write_gene_coordinates, write_marker_report, write_unit_counts, PROFILE_SYSTEMS_NOTE,
 )
 from osmotool.systems import detect_systems, DEFAULT_SYSTEMS, load_systems_config
 from osmotool.utils import resolve_out_prefix, check_tool, MarkerDb
@@ -83,6 +85,7 @@ def run_profile(
     exclude_families: str | None = None,
     markers: MarkerDb | None = None,
     train_refs: str | None = None,
+    report_levels: str | None = None,
 ) -> tuple[Path, Path]:
     """
     Profile FASTQ reads against the osmodiamond database.
@@ -128,6 +131,15 @@ def run_profile(
         near-universal housekeeping gene with no osmoadaptation-specific
         signal at the read level). Those families are still searched
         normally; this only drops them from the reported gene_counts.tsv.
+    report_levels:
+        Optional path to osmo_refdb's <release>.profile_report_levels.tsv
+        (v10 and later): the level at which each family is reliable on
+        short reads, decided on osmo_refdb's calibration reads -- on its
+        own (gene), summed with close paralogs it can't be told apart from
+        (group, e.g. opuAB/opuBB/opuCB), or not at all (none). Adds
+        <out_prefix>.unit_counts.tsv, one row per unit, where excluded
+        units are listed with NA rather than left out (see
+        output.write_unit_counts). gene_counts.tsv is unchanged.
 
     No multi-subunit system detection here (see systems.py / `annotate`'s
     --skip_systems): short reads don't carry contig-level coordinates, so
@@ -213,6 +225,19 @@ def run_profile(
         normalisation="rpm",
         copies_per_genome=copies,
     )
+    unit_stats = {}
+    if report_levels is not None:
+        unit_rows = aggregate_report_units(load_report_levels(report_levels), counts, rpm, copies)
+        write_unit_counts(
+            out_prefix, unit_rows,
+            total_reads=total_reads, filtered_reads=filtered_reads,
+            report_levels=report_levels, with_copies=copies is not None,
+        )
+        unit_stats = {
+            "report_levels": str(report_levels),
+            "units_reported": sum(1 for r in unit_rows if r["status"] == "reported"),
+            "units_excluded": ",".join(r["unit"] for r in unit_rows if r["status"] == "excluded") or "none",
+        }
     stats = build_aln_stats(
         mode="profile",
         total_reads=total_reads,
@@ -224,7 +249,7 @@ def run_profile(
         min_subject_cover=min_subject_cover,
         evalue=evalue,
         note_systems=PROFILE_SYSTEMS_NOTE,
-        extra=marker_stats,
+        extra={**(marker_stats or {}), **unit_stats} or None,
     )
     stats_path = write_aln_stats(out_prefix, stats)
 

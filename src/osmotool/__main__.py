@@ -54,6 +54,9 @@ def main(argv: list[str] | None = None) -> int:
                     "reference lengths), but it wasn't found. Pass "
                     "--no_markers to skip normalisation."
                 )
+            if refdb.report_levels is None:
+                log.info("No osmo_refdb.profile_report_levels.tsv in %s: no unit_counts.tsv "
+                         "(release predates report levels).", args.database)
             run_profile(
                 str(refdb.dmnd),
                 args.out_prefix,
@@ -74,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
                 exclude_families=str(refdb.exclude_families) if refdb.exclude_families else None,
                 markers=markers,
                 train_refs=str(refdb.train_refs) if markers is not None else None,
+                report_levels=str(refdb.report_levels) if refdb.report_levels else None,
             )
 
         elif args.subcommand == "annotate":

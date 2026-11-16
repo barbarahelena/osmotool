@@ -240,6 +240,7 @@ osmotool predict-nacl /path/to/osmo_refdb/releases/v10 \
 |---|---|
 | `<prefix>.gene_counts.tsv` | Per-gene raw counts and normalised value (`rpm` or `copies_per_kb`, depending on mode) |
 | `<prefix>.aln_stats.tsv` | Summary statistics |
+| `<prefix>.unit_counts.tsv` | `profile` only, when DATABASE ships `osmo_refdb.profile_report_levels.tsv` (osmo_refdb v10+) — the counts per reporting unit, excluded units included (see [Report units](#report-units-profile-mode) below) |
 | `<prefix>.markers.tsv` | `profile` only, when DATABASE ships `markers/` — per-marker evidence behind `copies_per_genome` (see [Copies per genome](#copies-per-genome-profile-mode) below) |
 | `<prefix>.systems.tsv` | `annotate` only — multi-subunit system calls (see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only) below) |
 | `<prefix>.gene_coordinates.tsv` | `annotate` only — per-gene contig/start/end/strand coordinates (see [`gene_coordinates.tsv` format](#gene_coordinatestsv-format-annotate-mode-only) below) |
@@ -355,6 +356,41 @@ directly comparable to `profile` mode's RPM values, which measure something
 different (community-level read abundance).
 
 **Paired-end counting**: each read of a pair counts as 0.5 (one read pair = one fragment).
+
+### Report units (`profile` mode)
+
+Some panel genes are close paralogs that a short read cannot reliably tell
+apart (e.g. the OpuA/OpuB/OpuC permeases), and some are not reliable on short
+reads at any level. osmo_refdb decides, per family or paralog group and on its
+calibration reads (never its benchmark reads), at which level a count can be
+trusted, and ships the decision as `osmo_refdb.profile_report_levels.tsv`.
+When the release has it, `profile` writes `<prefix>.unit_counts.tsv` next to
+`gene_counts.tsv`:
+
+```
+# total_reads    1000000
+# filtered_reads 42753
+# report_levels  releases/v10/osmo_refdb.profile_report_levels.tsv
+unit          report_level  members            status    raw_count  RPM    [copies_per_genome]
+ectA          gene          ectA               reported  12.5       12.5
+opu_permease  group         opuAB,opuBB,opuCB  reported  4.0        4
+opuAC         none          opuAC              excluded  NA         NA
+```
+
+- `gene`: the family on its own, same count as in `gene_counts.tsv`.
+- `group`: the members' summed counts. Every read counts toward one family
+  only (its best hit), so this is the number of reads called as any member.
+  `copies_per_genome` is summed too (`NA` if any member's is unknown).
+- `none`: listed with `status excluded` and `NA`, never 0. Don't read an
+  excluded unit as "gene absent": the table says nothing about it.
+- A label that has reads but is in no unit (e.g. a fused-ORF reference such
+  as `mrpA_mrpB_fused`) gets `status not_in_manifest`, so no read disappears
+  silently.
+
+Every unit in the manifest gets a row, zeros included. Read results from this
+table; `gene_counts.tsv` is unchanged and still lists every family on its own,
+including families whose gene-level count is not reliable. The manifest's
+other columns hold the calibration numbers behind each choice.
 
 ### `gene_coordinates.tsv` format (`annotate` mode only)
 

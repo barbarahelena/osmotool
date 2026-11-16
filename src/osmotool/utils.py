@@ -133,6 +133,7 @@ class RefDb:
     train_refs: Path | None = None    # osmo_refdb.train_refs.faa (profile only)
     markers: MarkerDb | None = None   # markers/ (profile only)
     nacl_model: Path | None = None    # nacl_model/ directory (annotate only)
+    report_levels: Path | None = None  # osmo_refdb.profile_report_levels.tsv (profile only)
 
 
 def _resolve_markers(root: Path) -> MarkerDb | None:
@@ -185,8 +186,9 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
     ``osmo_refdb.profile_excluded_families.txt``, and
     ``osmo_refdb.annotate_excluded_families.txt``. This lets callers pass
     one directory instead of wiring up each file individually. In profile
-    mode it also resolves ``osmo_refdb.train_refs.faa`` and the optional
-    ``markers/`` subdirectory used for copies-per-genome normalisation; in
+    mode it also resolves ``osmo_refdb.train_refs.faa``, the optional
+    ``markers/`` subdirectory used for copies-per-genome normalisation and
+    the optional ``osmo_refdb.profile_report_levels.tsv`` (v10+); in
     annotate mode, the optional ``nacl_model/`` subdirectory (NaCl-max
     predictor, see nacl.py).
 
@@ -225,7 +227,7 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
     if exclude_families is not None and not exclude_families.exists():
         exclude_families = None
 
-    train_refs, markers, nacl_model = None, None, None
+    train_refs, markers, nacl_model, report_levels = None, None, None, None
     if mode == "annotate":
         nacl_model = _resolve_nacl_model(root)
     if mode == "profile":
@@ -233,9 +235,13 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
         if not train_refs.exists():
             train_refs = None
         markers = _resolve_markers(root)
+        report_levels = root / "osmo_refdb.profile_report_levels.tsv"
+        if not report_levels.exists():
+            report_levels = None
 
     return RefDb(
         dmnd=dmnd, hmm=hmm, cascade_config=cascade_config,
         diamond_cutoffs=diamond_cutoffs, exclude_families=exclude_families,
         train_refs=train_refs, markers=markers, nacl_model=nacl_model,
+        report_levels=report_levels,
     )
