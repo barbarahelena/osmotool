@@ -130,9 +130,14 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
         "database", metavar="DATABASE",
         help="Path to an unpacked osmo_refdb release directory (e.g. "
              "releases/v9/). osmotool finds osmo_refdb.dmnd, "
-             "hmms/osmo_refdb.hmm, osmo_refdb.profile_cascade.tsv, and "
-             "osmo_refdb.profile_excluded_families.txt inside it by their "
-             "fixed names -- no need to point at each file separately.",
+             "hmms/osmo_refdb.hmm, osmo_refdb.profile_cascade.tsv, "
+             "osmo_refdb.profile_excluded_families.txt and (v10+) "
+             "osmo_refdb.profile_report_levels.tsv inside it by their "
+             "fixed names -- no need to point at each file separately. With "
+             "the report levels, <out_prefix>.unit_counts.tsv is written "
+             "next to gene_counts.tsv: one row per reporting unit (a gene, "
+             "or a paralog group short reads can't split), with units not "
+             "reliable at any level listed as excluded.",
     )
 
     reads = p.add_argument_group("reads (paired-end or single-end)")

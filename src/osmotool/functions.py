@@ -681,6 +681,62 @@ def load_cascade_config(path: str | Path) -> dict[str, float]:
 
 
 # ---------------------------------------------------------------------------
+# Profile-mode report levels (osmo_refdb's 11_compute_metrics.py)
+# ---------------------------------------------------------------------------
+
+REPORT_LEVELS = ("gene", "group", "none")
+
+
+@dataclass(frozen=True)
+class ReportUnit:
+    """One row of a release's report-level manifest: a family reported on
+    its own (gene), a paralog group summed into one row (group), or a
+    family excluded from reporting (none)."""
+    unit: str
+    report_level: str
+    members: tuple[str, ...]
+
+
+def load_report_levels(path: str | Path) -> list[ReportUnit]:
+    """
+    Load osmo_refdb's <release>.profile_report_levels.tsv: the level at
+    which `profile` reports each family, decided by osmo_refdb on its
+    calibration reads. Close paralogs that short reads cannot tell apart
+    can still be counted reliably as a group; units on "none" were not
+    reliable at any level and are listed as excluded instead of counted.
+
+    Lines starting with '#' (how the levels were decided) are skipped. Only
+    unit, report_level and members (comma-separated families) are read;
+    the calibration numbers next to them are there for people checking a
+    choice. A family may belong to one unit only.
+
+    Returns the units in file order.
+    """
+    units: list[ReportUnit] = []
+    owner: dict[str, str] = {}
+    with open(path) as fh:
+        reader = csv.DictReader((line for line in fh if not line.startswith("#")),
+                                delimiter="\t")
+        missing = {"unit", "report_level", "members"} - set(reader.fieldnames or [])
+        if missing:
+            raise ValueError(f"{path}: missing column(s) {', '.join(sorted(missing))}")
+        for row in reader:
+            level = row["report_level"]
+            if level not in REPORT_LEVELS:
+                raise ValueError(f"{path}: unit {row['unit']}: report_level {level!r} "
+                                 f"is not one of {', '.join(REPORT_LEVELS)}")
+            members = tuple(m for m in row["members"].split(",") if m)
+            if not members:
+                raise ValueError(f"{path}: unit {row['unit']} has no members")
+            for m in members:
+                if m in owner:
+                    raise ValueError(f"{path}: {m} is in both {owner[m]} and {row['unit']}")
+                owner[m] = row["unit"]
+            units.append(ReportUnit(row["unit"], level, members))
+    return units
+
+
+# ---------------------------------------------------------------------------
 # Profile-mode scope exclusions (osmo_refdb's 08c_write_scope_manifest.py)
 # ---------------------------------------------------------------------------
 

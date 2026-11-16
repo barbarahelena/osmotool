@@ -103,6 +103,54 @@ def _fmt_optional(value: float | None) -> str:
 
 
 # ---------------------------------------------------------------------------
+# unit_counts.tsv (profile mode, report levels)
+# ---------------------------------------------------------------------------
+
+def write_unit_counts(
+    out_prefix: str | Path,
+    rows: list[dict],
+    *,
+    total_reads: int,
+    filtered_reads: int,
+    report_levels: str | Path,
+    with_copies: bool = False,
+) -> Path:
+    """
+    Write ``<out_prefix>.unit_counts.tsv``: gene_counts.tsv summed to the
+    release's reporting units (rows from quantifier.aggregate_report_units).
+
+    Format::
+
+        # total_reads    <N>
+        # filtered_reads <N>
+        # report_levels  <path to osmo_refdb.profile_report_levels.tsv>
+        unit          report_level  members            status    raw_count  RPM   [copies_per_genome]
+        ectA          gene          ectA               reported  12.5       3.21  [0.42]
+        opu_permease  group         opuAB,opuBB,opuCB  reported  4.0        1.03  [0.11]
+        opuAC         none          opuAC              excluded  NA         NA    [NA]
+
+    Every unit in the manifest has a row, zeros included. Excluded units
+    carry NA, never 0: they were not reliable at any level, so the table
+    says nothing about whether those genes are there.
+    """
+    out_path = Path(str(out_prefix) + ".unit_counts.tsv")
+    with open(out_path, "w") as fh:
+        fh.write(f"# total_reads\t{total_reads}\n")
+        fh.write(f"# filtered_reads\t{filtered_reads}\n")
+        fh.write(f"# report_levels\t{report_levels}\n")
+        extra_col = "\tcopies_per_genome" if with_copies else ""
+        fh.write(f"unit\treport_level\tmembers\tstatus\traw_count\tRPM{extra_col}\n")
+        for r in rows:
+            raw = "NA" if r["raw_count"] is None else f"{r['raw_count']:.1f}"
+            norm = _fmt_optional(r["rpm"])
+            extra = "\t" + _fmt_optional(r["copies_per_genome"]) if with_copies else ""
+            fh.write(f"{r['unit']}\t{r['report_level'] or 'NA'}\t{','.join(r['members'])}\t"
+                     f"{r['status']}\t{raw}\t{norm}{extra}\n")
+    log.info("Wrote unit counts → %s", out_path)
+    return out_path
+
+
+# ---------------------------------------------------------------------------
 # markers.tsv (profile mode, copies-per-genome normalisation -- see normalise.py)
 # ---------------------------------------------------------------------------
 

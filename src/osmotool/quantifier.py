@@ -222,6 +222,69 @@ def count_hits(
 
 
 # ---------------------------------------------------------------------------
+# Report units (profile mode, osmo_refdb's profile_report_levels.tsv)
+# ---------------------------------------------------------------------------
+
+def aggregate_report_units(
+    units: Iterable,                 # functions.ReportUnit
+    counts: dict[str, float],
+    rpm: dict[str, float],
+    copies_per_genome: dict[str, float | None] | None = None,
+) -> list[dict]:
+    """
+    Per-family counts → one row per reporting unit, in manifest order.
+
+    reported (gene or group): raw_count, rpm and copies_per_genome are the
+      members' sums. Each read counts once, toward its single best-hit
+      family, so a group's sum is the number of reads called as any member.
+      copies_per_genome is None if any member's is (unknown length or
+      genome coverage); a member with no reads contributes 0.
+    excluded (none): every value None, written as NA, so an excluded unit
+      never reads as a zero (absence of the gene).
+
+    Labels in *counts* that belong to no unit and have reads (e.g. a fused-
+    ORF reference label, or a manifest from another release) get a row with
+    report_level None and status "not_in_manifest", so no read disappears
+    from the table unannounced.
+
+    Rows: unit, report_level, members (tuple), status, raw_count, rpm,
+    copies_per_genome.
+    """
+    rows: list[dict] = []
+    covered: set[str] = set()
+    for u in units:
+        covered.update(u.members)
+        if u.report_level == "none":
+            rows.append({"unit": u.unit, "report_level": "none", "members": u.members,
+                         "status": "excluded", "raw_count": None, "rpm": None,
+                         "copies_per_genome": None})
+            continue
+        missing = [m for m in u.members if m not in counts]
+        if missing:
+            log.warning("Report unit %s: no count for %s (excluded from profile output?), counted as 0",
+                        u.unit, ", ".join(missing))
+        copies = None
+        if copies_per_genome is not None:
+            vals = [copies_per_genome.get(m, 0.0 if counts.get(m, 0.0) == 0 else None)
+                    for m in u.members]
+            copies = None if any(v is None for v in vals) else sum(vals)
+        rows.append({
+            "unit": u.unit, "report_level": u.report_level, "members": u.members,
+            "status": "reported",
+            "raw_count": sum(counts.get(m, 0.0) for m in u.members),
+            "rpm": sum(rpm.get(m, 0.0) for m in u.members),
+            "copies_per_genome": copies,
+        })
+    for label in sorted(set(counts) - covered):
+        if counts[label] > 0:
+            rows.append({"unit": label, "report_level": None, "members": (label,),
+                         "status": "not_in_manifest", "raw_count": counts[label],
+                         "rpm": rpm.get(label, 0.0),
+                         "copies_per_genome": (copies_per_genome or {}).get(label)})
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Gene coordinates (annotate mode only)
 # ---------------------------------------------------------------------------
 
