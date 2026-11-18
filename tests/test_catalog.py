@@ -4,6 +4,7 @@ test_catalog.py — catalog-based read assignment (catalog.py) and its outputs
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from osmotool.catalog import (
 from osmotool.functions import ReportUnit
 from osmotool.output import write_gene_counts, write_unit_counts
 from osmotool.quantifier import aggregate_report_units
-from osmotool.utils import resolve_refdb, select_catalog
+from osmotool.utils import default_catalog, resolve_refdb, select_catalog
 
 
 # ---------------------------------------------------------------------------
@@ -340,3 +341,25 @@ def test_select_catalog_by_name_or_path(tmp_path: Path):
     assert select_catalog(refdb, str(own)) == own
     with pytest.raises(ValueError, match="gmgc_gut"):
         select_catalog(refdb, "marine")
+
+
+def test_default_catalog_is_the_one_the_release_ships(tmp_path: Path):
+    rel = _release_with_catalog(tmp_path)
+    refdb = resolve_refdb(str(rel), mode="profile")
+    shipped = rel / "catalogs" / "gmgc_gut"
+    assert default_catalog(refdb, None) == shipped
+    assert default_catalog(refdb, "gmgc_gut") == shipped
+    assert default_catalog(refdb, None, no_catalog=True) is None
+    with pytest.raises(ValueError, match="exclude each other"):
+        default_catalog(refdb, "gmgc_gut", no_catalog=True)
+
+
+def test_default_catalog_none_shipped_or_several(tmp_path: Path):
+    rel = _release_with_catalog(tmp_path)
+    refdb = resolve_refdb(str(rel), mode="profile")
+    assert default_catalog(dataclasses.replace(refdb, catalogs={}), None) is None
+    several = dataclasses.replace(refdb, catalogs={"gmgc_gut": rel / "catalogs" / "gmgc_gut",
+                                                   "marine": tmp_path / "marine"})
+    with pytest.raises(ValueError, match="several gene catalogs"):
+        default_catalog(several, None)
+    assert default_catalog(several, "gmgc_gut") == rel / "catalogs" / "gmgc_gut"

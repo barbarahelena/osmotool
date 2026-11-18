@@ -72,7 +72,7 @@ INDEX_META = "catalog_index.json"      # a separately built full index (index_ca
 # bwa-mem3 (Fulcrum Genomics; the engine behind the bwa-mem3-rs Rust crate)
 # is the default: a drop-in for bwa mem / bwa-mem2, on bioconda, reading
 # bwa-mem2 indexes. It needs AVX2 on x86-64 (or NEON / Apple M1+); on older
-# CPUs use aligner="bwa". aligner_bin swaps in any executable with the same
+# CPUs use aligner="bwa-mem2". aligner_bin swaps in any executable with the same
 # CLI and index format (e.g. a bwa-mem2 reimplementation).
 DEFAULT_ALIGNER = "bwa-mem3"
 ALIGNERS = {
@@ -80,7 +80,6 @@ ALIGNERS = {
                  "index_suffixes": (".amb", ".ann", ".bwt.2bit.64", ".pac")},
     "bwa-mem2": {"bin": "bwa-mem2",
                  "index_suffixes": (".0123", ".amb", ".ann", ".bwt.2bit.64", ".pac")},
-    "bwa": {"bin": "bwa", "index_suffixes": (".amb", ".ann", ".bwt", ".pac", ".sa")},
 }
 
 ANNOTATED, HOMOLOG, DECOY = "annotated", "homolog", "decoy"

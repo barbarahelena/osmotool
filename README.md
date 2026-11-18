@@ -403,11 +403,15 @@ profilers such as Cayman:
 
 A release can ship catalogs under `catalogs/<name>/`: index, annotation
 and metadata built with that release's HMMs, versioned with it as one unit
-(osmo_refdb `run_pipeline.sh catalog`). Pick one by name:
+(osmo_refdb's `RELEASE_CATALOG`). `profile` uses it by default when the
+release ships one; with several, pick one by name; `--no_catalog` is
+translated search only:
 
 ```bash
 # per sample: catalog first, translated search for the rest
+osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz -o sample
 osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog gmgc_gut -o sample
+osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --no_catalog -o sample
 ```
 
 For a catalog of your own, build it once per release (translate, hmmsearch
@@ -448,7 +452,7 @@ osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog my_catalog_v10 -
   checksum) and to the aligner that indexed it (`catalog.json`). A shipped
   catalog always matches its release. bwa-mem3 is
   the default (bioconda `bwa-mem3`; needs AVX2 on x86-64, or ARM NEON);
-  `--aligner bwa` or `bwa-mem2` also work, and `--aligner_bin` points at
+  `--aligner bwa-mem2` also works, and `--aligner_bin` points at
   another executable with the same CLI and index format.
 - Catalog-bound: above 97% identity only strains whose genes are in the
   catalog are seen. That suits well-catalogued communities such as the human
