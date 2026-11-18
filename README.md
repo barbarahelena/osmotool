@@ -428,7 +428,14 @@ osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog my_catalog_v10 -
   gene lands on its own gene instead of being forced onto a panel family.
   `--index hits` indexes only genes with an HMM hit (sub-cutoff homologs and
   decoys included), for a much smaller index; reads from other genes then
-  fall back.
+  fall back, or settle on a hit gene they are close to. `--index neighbours`
+  adds those close genes: every gene without a hit whose 150 bp windows
+  (every 50 bp) align to a hit gene at >= 90% over >= 45 bp. A read from one
+  of them maps to its own gene and is dropped. On a 1 M-gene slice of the
+  GMGC human-gut catalog this removed every false catalog call of the hits
+  index (65 per 4 M reads where the strain is catalogued) at 1.3x its size;
+  the whole-catalog index is 19x (osmo_refdb `studies/catalog_index`). This
+  is the index osmo_refdb releases ship.
 - A read aligned at >= 97% nucleotide identity over >= 45 bp (Cayman's
   defaults; `--catalog_min_identity`, `--catalog_min_aligned`) is settled by
   its gene: counted for the gene's family wherever it lies on the gene (on a

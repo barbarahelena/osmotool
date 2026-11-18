@@ -347,10 +347,14 @@ def _add_build_catalog_parser(sub: argparse._SubParsersAction) -> None:
                         "bwa-mem3 needs AVX2 on x86-64 (or ARM NEON).")
     p.add_argument("--aligner_bin", default=None, metavar="EXE",
                    help="Executable for --aligner if not the default name on PATH.")
-    p.add_argument("--index", default="all", choices=["all", "hits", "none"],
+    p.add_argument("--index", default="all", choices=["all", "hits", "neighbours", "none"],
                    help="all: index every catalog gene, so reads map competitively "
                         "(as Cayman). hits: index only genes with an HMM hit -- a much "
                         "smaller index, but reads from other genes can only fall back. "
+                        "neighbours: the hit genes plus every gene without a hit that a "
+                        "read window aligns to a hit gene at >= 90%% over >= 45 bp, so "
+                        "reads from those competitors map to their own gene and are "
+                        "dropped; about as small as hits. "
                         "none: annotation only, used with a full index from "
                         "`osmotool index-catalog` (profile --catalog_index).")
     p.add_argument("--min_protein_length", type=int, default=30, metavar="AA")

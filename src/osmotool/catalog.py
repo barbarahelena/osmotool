@@ -10,8 +10,10 @@ assigned by near-exact nucleotide matching (bwa-mem3 mem by default) to those ge
 
   build_catalog       genes.fna (+ optional proteins) -> catalog directory:
                       an aligner index of the whole catalog (default, as
-                      Cayman: reads map competitively against every gene)
-                      or of the HMM-hit genes only (index="hits", small),
+                      Cayman: reads map competitively against every gene),
+                      of the HMM-hit genes only (index="hits", small), or of
+                      those plus the genes close to them (index="neighbours",
+                      small and competitive where it matters),
                       catalog.annotation.tsv (the hit genes), catalog.json
   map_reads           reads -> per-read catalog decisions:
                         call      primary alignment >= min_identity over
@@ -38,7 +40,16 @@ read from a hard negative (same domain, different gene) still maps to its
 own gene and is dropped, instead of being forced onto the nearest annotated
 family or passed to translated search, where those reads are the main
 source of false positives. A read from a gene with no hit at all can then
-only fall back.
+only fall back, or, from a gene close to a hit gene, settle on it.
+
+index="neighbours" adds those close genes: every gene without a hit is cut
+into read-sized windows, mapped to the hit genes, and kept when a window
+aligns near the identity profile settles reads at (NEIGHBOUR_MIN_IDENTITY,
+looser than 0.97 to allow for strain divergence and sequencing errors). A
+read from such a gene then maps to its own gene and is dropped. On a 1 M-gene
+slice of the GMGC human-gut catalog this removed every false catalog call of
+the hits index at 1.3x its size, where the whole-catalog index is 19x
+(osmo_refdb studies/catalog_index).
 
 Catalog-bound by construction: above ~97% nucleotide identity only strains
 whose genes are in the catalog are seen. Everything else falls back.
@@ -51,6 +62,7 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -81,6 +93,13 @@ ALIGNERS = {
     "bwa-mem2": {"bin": "bwa-mem2",
                  "index_suffixes": (".0123", ".amb", ".ann", ".bwt.2bit.64", ".pac")},
 }
+
+INDEX_KINDS = ("all", "hits", "neighbours", "none")
+# index="neighbours": a gene without a hit is a neighbour when a WINDOW-bp
+# window of it (every STEP bp) aligns at >= MIN_IDENTITY over >= MIN_ALIGNED bp
+# to a hit gene (any placement, XA included)
+NEIGHBOUR_WINDOW, NEIGHBOUR_STEP = 150, 50
+NEIGHBOUR_MIN_IDENTITY, NEIGHBOUR_MIN_ALIGNED = 0.90, 45
 
 ANNOTATED, HOMOLOG, DECOY = "annotated", "homolog", "decoy"
 BACKGROUND = "background"   # indexed gene without any HMM hit
@@ -232,11 +251,13 @@ def build_catalog(
               competing for reads, without copying the FASTA; "hits" indexes
               only the genes with an HMM hit (much smaller, so it can ship with
               a release, but reads from other genes can only fall back);
+              "neighbours" indexes the hit genes plus the genes without a hit
+              that are close to one (find_neighbours), small enough to ship;
               "none" writes the annotation only, to be used with a full index
               built separately by index_catalog (profile --catalog_index).
     """
-    if index not in ("all", "hits", "none"):
-        raise ValueError(f"index must be 'all', 'hits' or 'none', not {index!r}")
+    if index not in INDEX_KINDS:
+        raise ValueError(f"index must be one of {', '.join(INDEX_KINDS)}, not {index!r}")
     if aligner not in ALIGNERS:
         raise ValueError(f"Unknown aligner {aligner!r}: expected one of {', '.join(ALIGNERS)}")
     aligner_bin = aligner_bin or ALIGNERS[aligner]["bin"]
@@ -280,9 +301,9 @@ def build_catalog(
     hits = parse_domtblout(domtbl)
     decisions = {g: assign_gene(h, ga, decoy_models) for g, h in hits.items()}
 
-    # --- lengths of the hit genes (and, for index="hits", their sequences) ---
-    fna = out_dir / CATALOG_FNA          # index prefix; a FASTA only for "hits"
-    out = open(fna, "w") if index == "hits" else None
+    # --- lengths of the hit genes (and, for index="hits"/"neighbours", their sequences) ---
+    fna = out_dir / CATALOG_FNA          # index prefix; a FASTA only for "hits"/"neighbours"
+    out = open(fna, "w") if index in ("hits", "neighbours") else None
     try:
         for gid, seq in iter_fasta(genes):
             if gid in decisions:
@@ -315,15 +336,27 @@ def build_catalog(
             out.write(f"{gid}\t{d['label']}\t{d['status']}\t{gene_len[gid]}\t{start}\t{end}\t"
                       f"{d['score']}\t{d['best_model']}\t{d['best_score']}\t{others}\n")
 
+    # --- the hit genes' neighbours, appended to the FASTA of the hit genes ---
+    neighbours: dict[str, float] = {}
+    if index == "neighbours":
+        neighbours = find_neighbours(genes, fna, set(decisions), out_dir / "neighbour_search",
+                                     aligner_bin=aligner_bin, threads=threads)
+        with open(fna, "a") as out:
+            for gid, seq in iter_fasta(genes):
+                if gid in neighbours:
+                    out.write(f">{gid}\n{seq}\n")
+        log.info("%d genes without a hit are neighbours of a hit gene", len(neighbours))
+
     # --- aligner index ---
-    n_indexed = {"hits": len(decisions), "all": n_genes, "none": 0}[index]
+    n_indexed = {"hits": len(decisions), "neighbours": len(decisions) + len(neighbours),
+                 "all": n_genes, "none": 0}[index]
     if index != "none":
-        target = fna if index == "hits" else Path(genes)
+        target = fna if index in ("hits", "neighbours") else Path(genes)
         log.info("Indexing %d catalog genes (%s) with %s", n_indexed, index, aligner_bin)
         if subprocess.run([aligner_bin, "index", "-p", str(fna), str(target)],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
             raise RuntimeError(f"{aligner_bin} index failed")
-    if index == "hits":
+    if index in ("hits", "neighbours"):
         fna.unlink(missing_ok=True)      # the index holds the sequences (.pac)
 
     from osmotool import __version__
@@ -340,6 +373,11 @@ def build_catalog(
         "n_genes_annotated_or_hit": len(decisions),
         "index": index,
         "n_genes_indexed": n_indexed,
+        **({"n_neighbours": len(neighbours),
+            "neighbour_rule": {"window": NEIGHBOUR_WINDOW, "step": NEIGHBOUR_STEP,
+                               "min_identity": NEIGHBOUR_MIN_IDENTITY,
+                               "min_aligned": NEIGHBOUR_MIN_ALIGNED}}
+           if index == "neighbours" else {}),
         "min_protein_length": min_protein_length,
         "hmmsearch_evalue": evalue,
         "aligner": aligner,
@@ -352,6 +390,80 @@ def build_catalog(
              sum(v for k, v in by_label.items() if k not in (HOMOLOG, DECOY)),
              by_label.get(HOMOLOG, 0), by_label.get(DECOY, 0))
     return out_dir
+
+
+def neighbour_windows(genes: str | Path, hits: set[str], window: int = NEIGHBOUR_WINDOW,
+                      step: int = NEIGHBOUR_STEP) -> Iterator[tuple[str, str]]:
+    """(<gene>|<start>, window) for every gene without a hit: windows every
+    step bp, and one ending at the gene's end; a gene shorter than a window
+    is one window."""
+    for gid, seq in iter_fasta(genes):
+        if gid in hits:
+            continue
+        last = max(len(seq) - window, 0)
+        starts = list(range(0, last + 1, step))
+        if starts[-1] != last:
+            starts.append(last)
+        for s in starts:
+            yield f"{gid}|{s}", seq[s:s + window]
+
+
+def select_neighbours(sam_lines, min_identity: float = NEIGHBOUR_MIN_IDENTITY,
+                      min_aligned: int = NEIGHBOUR_MIN_ALIGNED) -> dict[str, float]:
+    """{gene: best identity} of the windows (named <gene>|<start>) aligned
+    to a hit gene at >= min_identity over >= min_aligned bp, the primary and
+    every XA placement. Identity is 1 - NM / alignment columns, as for reads."""
+    best: dict[str, float] = {}
+    for line in sam_lines:
+        if line.startswith("@"):
+            continue
+        f = line.rstrip("\n").split("\t")
+        if int(f[1]) & 0x4:
+            continue
+        nm = next((int(t[5:]) for t in f[11:] if t.startswith("NM:i:")), None)
+        placements = [(f[5], nm)] + [(c, n) for _g, _p, c, n in alternative_placements(f)]
+        gene = f[0].rsplit("|", 1)[0]
+        for cigar, nm in placements:
+            if nm is None:
+                continue
+            cols = aligned = 0
+            for n, op in CIGAR_RE.findall(cigar):
+                n = int(n)
+                if op in "M=XI":
+                    cols += n; aligned += n
+                elif op in "DN":
+                    cols += n
+            if not cols or aligned < min_aligned:
+                continue
+            identity = 1.0 - nm / cols
+            if identity >= min_identity and identity > best.get(gene, 0.0):
+                best[gene] = identity
+    return best
+
+
+def find_neighbours(genes: str | Path, hits_fna: Path, hits: set[str], work_dir: Path, *,
+                    aligner_bin: str, threads: int = 4) -> dict[str, float]:
+    """The genes without a hit close to a hit gene: their windows
+    (neighbour_windows) mapped to an index of the hit genes (hits_fna) with
+    `mem -a`, selected by select_neighbours. work_dir is removed afterwards,
+    and kept (with the aligner's log) when a step fails."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    prefix, windows = work_dir / "hits", work_dir / "windows.fa"
+    if subprocess.run([aligner_bin, "index", "-p", str(prefix), str(hits_fna)],
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+        raise RuntimeError(f"{aligner_bin} index failed on the hit genes ({work_dir})")
+    with open(windows, "w") as out:
+        for name, seq in neighbour_windows(genes, hits):
+            out.write(f">{name}\n{seq}\n")
+    log.info("Mapping the windows of the genes without a hit to the hit genes (%s)", aligner_bin)
+    with open(work_dir / "mem.log", "w") as err:
+        proc = subprocess.Popen([aligner_bin, "mem", "-a", "-t", str(threads), str(prefix),
+                                 str(windows)], stdout=subprocess.PIPE, stderr=err, text=True)
+        best = select_neighbours(proc.stdout)
+        if proc.wait() != 0:
+            raise RuntimeError(f"{aligner_bin} mem failed on the windows (see {work_dir}/mem.log)")
+    shutil.rmtree(work_dir)
+    return best
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +486,7 @@ class Catalog:
     genes: dict[str, CatalogGene]
     meta: dict = field(default_factory=dict)
     aligner_bin: str = ALIGNERS[DEFAULT_ALIGNER]["bin"]
-    index_kind: str = "all"          # all | hits: which genes the index holds
+    index_kind: str = "all"          # all | hits | neighbours: which genes the index holds
 
 
 def index_catalog(
