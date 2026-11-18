@@ -4,20 +4,24 @@ test_catalog.py — catalog-based read assignment (catalog.py) and its outputs
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import random
+import shutil
 from pathlib import Path
 
 import pytest
 
 from osmotool.catalog import (
     ALIGNERS, ANNOTATED, BACKGROUND, DECOY, HOMOLOG, INDEX_META, Catalog, CatalogGene,
-    alternative_placements, assign_gene, classify_alignment, load_catalog, norm_read_id,
-    parse_domtblout, read_ga_cutoffs, settle_records, translate, write_fallback_fastq,
+    alternative_placements, assign_gene, classify_alignment, find_neighbours, load_catalog,
+    neighbour_windows, norm_read_id, parse_domtblout, read_ga_cutoffs, select_neighbours,
+    settle_records, translate, write_fallback_fastq,
 )
 from osmotool.functions import ReportUnit
 from osmotool.output import write_gene_counts, write_unit_counts
 from osmotool.quantifier import aggregate_report_units
-from osmotool.utils import resolve_refdb, select_catalog
+from osmotool.utils import default_catalog, resolve_refdb, select_catalog
 
 
 # ---------------------------------------------------------------------------
@@ -340,3 +344,68 @@ def test_select_catalog_by_name_or_path(tmp_path: Path):
     assert select_catalog(refdb, str(own)) == own
     with pytest.raises(ValueError, match="gmgc_gut"):
         select_catalog(refdb, "marine")
+
+
+def test_default_catalog_is_the_one_the_release_ships(tmp_path: Path):
+    rel = _release_with_catalog(tmp_path)
+    refdb = resolve_refdb(str(rel), mode="profile")
+    shipped = rel / "catalogs" / "gmgc_gut"
+    assert default_catalog(refdb, None) == shipped
+    assert default_catalog(refdb, "gmgc_gut") == shipped
+    assert default_catalog(refdb, None, no_catalog=True) is None
+    with pytest.raises(ValueError, match="exclude each other"):
+        default_catalog(refdb, "gmgc_gut", no_catalog=True)
+
+
+def test_default_catalog_none_shipped_or_several(tmp_path: Path):
+    rel = _release_with_catalog(tmp_path)
+    refdb = resolve_refdb(str(rel), mode="profile")
+    assert default_catalog(dataclasses.replace(refdb, catalogs={}), None) is None
+    several = dataclasses.replace(refdb, catalogs={"gmgc_gut": rel / "catalogs" / "gmgc_gut",
+                                                   "marine": tmp_path / "marine"})
+    with pytest.raises(ValueError, match="several gene catalogs"):
+        default_catalog(several, None)
+    assert default_catalog(several, "gmgc_gut") == rel / "catalogs" / "gmgc_gut"
+
+
+# ---------------------------------------------------------------------------
+# index="neighbours": the genes without a hit close to a hit gene
+# ---------------------------------------------------------------------------
+
+def test_neighbour_windows_cover_every_gene_without_a_hit(tmp_path: Path):
+    fna = tmp_path / "g.fna"
+    fna.write_text(">hit\n" + "A" * 400 + "\n>long\n" + "C" * 320 + "\n>short\n" + "G" * 90 + "\n")
+    wins = list(neighbour_windows(fna, {"hit"}, window=150, step=50))
+    assert [n for n, _ in wins] == ["long|0", "long|50", "long|100", "long|150", "long|170", "short|0"]
+    assert all(len(w) == 150 for n, w in wins if n.startswith("long"))
+    assert wins[-1][1] == "G" * 90
+
+
+def test_select_neighbours_identity_length_and_alternatives():
+    sam = ["@HD\tVN:1.6\n"] + ["\t".join(f) + "\n" for f in (
+        _sam(qname="n1|0", nm=10),                          # 150M, 93.3%: a neighbour
+        _sam(qname="n1|50", nm=2),                          # better window of the same gene
+        _sam(qname="far|0", nm=20),                         # 86.7%: not
+        _sam(qname="short|0", cigar="40M110S", nm=0),       # 40 bp aligned: not
+        _sam(qname="alt|0", nm=30, xa=[("geneB", 10, "150M", 3)]),   # only its XA placement passes
+        _sam(qname="unmapped|0", flag=4, rname="*"),
+    )]
+    best = select_neighbours(sam, min_identity=0.90, min_aligned=45)
+    assert set(best) == {"n1", "alt"}
+    assert best["n1"] == pytest.approx(1 - 2 / 150) and best["alt"] == pytest.approx(0.98)
+
+
+@pytest.mark.skipif(shutil.which("bwa-mem3") is None, reason="needs bwa-mem3")
+def test_find_neighbours_with_bwa_mem3(tmp_path: Path):
+    rng = random.Random(5)
+    hit = "".join(rng.choice("ACGT") for _ in range(1200))
+    near = "".join(c if rng.random() > 0.05 else {"A": "C", "C": "G", "G": "T", "T": "A"}[c] for c in hit)
+    other = "".join(rng.choice("ACGT") for _ in range(1200))
+    genes = tmp_path / "genes.fna"
+    genes.write_text(f">hit\n{hit}\n>near\n{near}\n>other\n{other}\n")
+    hits_fna = tmp_path / "hits.fna"
+    hits_fna.write_text(f">hit\n{hit}\n")
+    work = tmp_path / "work"
+    best = find_neighbours(genes, hits_fna, {"hit"}, work, aligner_bin="bwa-mem3", threads=1)
+    assert set(best) == {"near"} and best["near"] >= 0.90
+    assert not work.exists()

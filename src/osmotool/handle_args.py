@@ -185,15 +185,23 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
     cat.add_argument(
         "--catalog", metavar="NAME|DIR", default=None,
         help="Assign reads to a gene catalog annotated at full length before "
-             "translated search. NAME is a catalog DATABASE ships under "
-             "catalogs/NAME/ (index and annotation, versioned with the "
-             "release); DIR is a catalog built with `osmotool build-catalog`. "
+             "translated search. Default: the catalog DATABASE ships under "
+             "catalogs/ when it ships exactly one (pass NAME to choose when it "
+             "ships several; --no_catalog for translated search only). NAME is "
+             "a catalog DATABASE ships under catalogs/NAME/ (index and "
+             "annotation, versioned with the release); DIR is a catalog built "
+             "with `osmotool build-catalog`. "
              "Reads aligned (bwa-mem3, as the catalog was built) at >= "
              "--catalog_min_identity over >= --catalog_min_aligned bp take the "
              "catalog gene's HMM annotation; only the rest go to DIAMOND + the "
              "cascade. gene_counts.tsv and unit_counts.tsv then show "
              "catalog_count, catalog_ambiguous and translated_count. The "
              "catalog must have been built with DATABASE's HMMs.",
+    )
+    cat.add_argument(
+        "--no_catalog", action="store_true", default=False,
+        help="Translated search only (DIAMOND + the cascade), even when "
+             "DATABASE ships a catalog.",
     )
     cat.add_argument(
         "--catalog_min_identity", type=float, default=0.97, metavar="FRAC",
@@ -334,15 +342,19 @@ def _add_build_catalog_parser(sub: argparse._SubParsersAction) -> None:
                    help="Protein FASTA with the same IDs (otherwise genes are "
                         "translated with table 11).")
     p.add_argument("-o", "--out_dir", required=True, metavar="DIR")
-    p.add_argument("--aligner", default="bwa-mem3", choices=["bwa-mem3", "bwa-mem2", "bwa"],
+    p.add_argument("--aligner", default="bwa-mem3", choices=["bwa-mem3", "bwa-mem2"],
                    help="Aligner that indexes the catalog; profile maps with the same one. "
                         "bwa-mem3 needs AVX2 on x86-64 (or ARM NEON).")
     p.add_argument("--aligner_bin", default=None, metavar="EXE",
                    help="Executable for --aligner if not the default name on PATH.")
-    p.add_argument("--index", default="all", choices=["all", "hits", "none"],
+    p.add_argument("--index", default="all", choices=["all", "hits", "neighbours", "none"],
                    help="all: index every catalog gene, so reads map competitively "
                         "(as Cayman). hits: index only genes with an HMM hit -- a much "
                         "smaller index, but reads from other genes can only fall back. "
+                        "neighbours: the hit genes plus every gene without a hit that a "
+                        "read window aligns to a hit gene at >= 90%% over >= 45 bp, so "
+                        "reads from those competitors map to their own gene and are "
+                        "dropped; about as small as hits. "
                         "none: annotation only, used with a full index from "
                         "`osmotool index-catalog` (profile --catalog_index).")
     p.add_argument("--min_protein_length", type=int, default=30, metavar="AA")
@@ -367,7 +379,7 @@ def _add_index_catalog_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--genes", required=True, metavar="FNA[.GZ]",
                    help="The nucleotide gene FASTA the catalog was annotated from.")
     p.add_argument("-o", "--out_dir", required=True, metavar="DIR")
-    p.add_argument("--aligner", default="bwa-mem3", choices=["bwa-mem3", "bwa-mem2", "bwa"])
+    p.add_argument("--aligner", default="bwa-mem3", choices=["bwa-mem3", "bwa-mem2"])
     p.add_argument("--aligner_bin", default=None, metavar="EXE")
 
 

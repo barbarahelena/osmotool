@@ -403,11 +403,15 @@ profilers such as Cayman:
 
 A release can ship catalogs under `catalogs/<name>/`: index, annotation
 and metadata built with that release's HMMs, versioned with it as one unit
-(osmo_refdb `run_pipeline.sh catalog`). Pick one by name:
+(osmo_refdb's `RELEASE_CATALOG`). `profile` uses it by default when the
+release ships one; with several, pick one by name; `--no_catalog` is
+translated search only:
 
 ```bash
 # per sample: catalog first, translated search for the rest
+osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz -o sample
 osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog gmgc_gut -o sample
+osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --no_catalog -o sample
 ```
 
 For a catalog of your own, build it once per release (translate, hmmsearch
@@ -424,7 +428,14 @@ osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog my_catalog_v10 -
   gene lands on its own gene instead of being forced onto a panel family.
   `--index hits` indexes only genes with an HMM hit (sub-cutoff homologs and
   decoys included), for a much smaller index; reads from other genes then
-  fall back.
+  fall back, or settle on a hit gene they are close to. `--index neighbours`
+  adds those close genes: every gene without a hit whose 150 bp windows
+  (every 50 bp) align to a hit gene at >= 90% over >= 45 bp. A read from one
+  of them maps to its own gene and is dropped. On a 1 M-gene slice of the
+  GMGC human-gut catalog this removed every false catalog call of the hits
+  index (65 per 4 M reads where the strain is catalogued) at 1.3x its size;
+  the whole-catalog index is 19x (osmo_refdb `studies/catalog_index`). This
+  is the index osmo_refdb releases ship.
 - A read aligned at >= 97% nucleotide identity over >= 45 bp (Cayman's
   defaults; `--catalog_min_identity`, `--catalog_min_aligned`) is settled by
   its gene: counted for the gene's family wherever it lies on the gene (on a
@@ -448,7 +459,7 @@ osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog my_catalog_v10 -
   checksum) and to the aligner that indexed it (`catalog.json`). A shipped
   catalog always matches its release. bwa-mem3 is
   the default (bioconda `bwa-mem3`; needs AVX2 on x86-64, or ARM NEON);
-  `--aligner bwa` or `bwa-mem2` also work, and `--aligner_bin` points at
+  `--aligner bwa-mem2` also works, and `--aligner_bin` points at
   another executable with the same CLI and index format.
 - Catalog-bound: above 97% identity only strains whose genes are in the
   catalog are seen. That suits well-catalogued communities such as the human

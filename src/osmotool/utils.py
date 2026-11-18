@@ -201,6 +201,25 @@ def select_catalog(refdb: RefDb, value: str) -> Path:
                      "nor a catalog directory (no catalog.json)")
 
 
+def default_catalog(refdb: RefDb, value: str | None, no_catalog: bool = False) -> Path | None:
+    """The catalog `profile` uses: --catalog VALUE when given, else the one
+    catalog the release ships, None with --no_catalog or when it ships none.
+    A release shipping several needs --catalog NAME: which habitat fits a
+    sample is not something to guess."""
+    if no_catalog:
+        if value is not None:
+            raise ValueError("--catalog and --no_catalog exclude each other")
+        return None
+    if value is not None:
+        return select_catalog(refdb, value)
+    if not refdb.catalogs:
+        return None
+    if len(refdb.catalogs) > 1:
+        raise ValueError(f"the release ships several gene catalogs ({', '.join(refdb.catalogs)}): "
+                         "pass --catalog NAME, or --no_catalog for translated search only")
+    return next(iter(refdb.catalogs.values()))
+
+
 def resolve_refdb(database: str, mode: str) -> RefDb:
     """Resolve an osmo_refdb release directory into its fixed-name files.
 
