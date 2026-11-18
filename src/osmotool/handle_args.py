@@ -41,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_profile_parser(sub)
     _add_annotate_parser(sub)
     _add_predict_nacl_parser(sub)
+    _add_build_catalog_parser(sub)
+    _add_index_catalog_parser(sub)
     _add_download_parser(sub)
 
     return parser
@@ -179,6 +181,50 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
              "you don't have them.",
     )
 
+    cat = p.add_argument_group("gene catalog (built once with `osmotool build-catalog`)")
+    cat.add_argument(
+        "--catalog", metavar="NAME|DIR", default=None,
+        help="Assign reads to a gene catalog annotated at full length before "
+             "translated search. NAME is a catalog DATABASE ships under "
+             "catalogs/NAME/ (index and annotation, versioned with the "
+             "release); DIR is a catalog built with `osmotool build-catalog`. "
+             "Reads aligned (bwa-mem3, as the catalog was built) at >= "
+             "--catalog_min_identity over >= --catalog_min_aligned bp take the "
+             "catalog gene's HMM annotation; only the rest go to DIAMOND + the "
+             "cascade. gene_counts.tsv and unit_counts.tsv then show "
+             "catalog_count, catalog_ambiguous and translated_count. The "
+             "catalog must have been built with DATABASE's HMMs.",
+    )
+    cat.add_argument(
+        "--catalog_min_identity", type=float, default=0.97, metavar="FRAC",
+        help="Minimum nucleotide identity (1 - NM / alignment columns) for a "
+             "read to be settled by the catalog.",
+    )
+    cat.add_argument(
+        "--catalog_min_aligned", type=int, default=45, metavar="BP",
+        help="Minimum aligned read bases for a read to be settled by the catalog "
+             "(soft-clipped ends, e.g. a read running off a gene end, don't count). "
+             "0.97 / 45 are Cayman's defaults.",
+    )
+    cat.add_argument(
+        "--catalog_only", action="store_true", default=False,
+        help="Count catalog-settled reads only; skip DIAMOND and the cascade for "
+             "the rest. Only sensible when the community is well covered by the "
+             "catalog (e.g. human gut with a gut catalog).",
+    )
+    cat.add_argument(
+        "--catalog_index", metavar="DIR", default=None,
+        help="Map against this full index of the catalog's genes (built by "
+             "`osmotool index-catalog`, distributed separately from the "
+             "release) instead of the index the catalog ships, if any. Must "
+             "be built from the same gene file the catalog was annotated from.",
+    )
+    cat.add_argument(
+        "--aligner_bin", metavar="EXE", default=None,
+        help="Map with this executable instead of the one recorded in the "
+             "catalog (same CLI and index format, e.g. a reimplementation).",
+    )
+
     norm = p.add_argument_group("copies-per-genome normalisation")
     norm.add_argument(
         "--no_markers", action="store_true", default=False,
@@ -263,6 +309,66 @@ def _add_predict_nacl_parser(sub: argparse._SubParsersAction) -> None:
         "-o", "--output", default=None, metavar="TSV",
         help="Write the summary table here instead of stdout.",
     )
+
+
+def _add_build_catalog_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "build-catalog",
+        help="Annotate a gene catalog once at full length for `profile --catalog`.",
+        description="Translate a nucleotide gene catalog (e.g. a prevalence-"
+                    "filtered GMGC subset, or UHGG genes), search it with "
+                    "DATABASE's HMMs under their gathering cutoffs (the decision "
+                    "`annotate --method hmm` makes), and write a catalog "
+                    "directory with only the genes that hit any model: annotated "
+                    "genes, plus sub-cutoff homologs and decoy-model genes kept so "
+                    "that reads from them are recognised and dropped. The whole "
+                    "catalog is indexed (bwa-mem3 by default), so every read maps "
+                    "competitively to its own gene.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    p.add_argument("database", metavar="DATABASE",
+                   help="osmo_refdb release directory (needs hmms/osmo_refdb.hmm).")
+    p.add_argument("--genes", required=True, metavar="FNA[.GZ]",
+                   help="Nucleotide CDS FASTA, one in-frame gene per record.")
+    p.add_argument("--proteins", default=None, metavar="FAA[.GZ]",
+                   help="Protein FASTA with the same IDs (otherwise genes are "
+                        "translated with table 11).")
+    p.add_argument("-o", "--out_dir", required=True, metavar="DIR")
+    p.add_argument("--aligner", default="bwa-mem3", choices=["bwa-mem3", "bwa-mem2", "bwa"],
+                   help="Aligner that indexes the catalog; profile maps with the same one. "
+                        "bwa-mem3 needs AVX2 on x86-64 (or ARM NEON).")
+    p.add_argument("--aligner_bin", default=None, metavar="EXE",
+                   help="Executable for --aligner if not the default name on PATH.")
+    p.add_argument("--index", default="all", choices=["all", "hits", "none"],
+                   help="all: index every catalog gene, so reads map competitively "
+                        "(as Cayman). hits: index only genes with an HMM hit -- a much "
+                        "smaller index, but reads from other genes can only fall back. "
+                        "none: annotation only, used with a full index from "
+                        "`osmotool index-catalog` (profile --catalog_index).")
+    p.add_argument("--min_protein_length", type=int, default=30, metavar="AA")
+    p.add_argument("--evalue", type=float, default=1e-5,
+                   help="hmmsearch reporting threshold; reported genes below the "
+                        "gathering cutoff are kept as homologs.")
+    p.add_argument("-t", "--threads", type=int, default=4)
+
+
+def _add_index_catalog_parser(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser(
+        "index-catalog",
+        help="Build the full, competitive index of a gene catalog (release-independent).",
+        description="Index every gene of a catalog with bwa-mem3 (default) for "
+                    "`profile --catalog NAME --catalog_index DIR`. The index depends "
+                    "only on the gene file and the aligner, not on an osmo_refdb "
+                    "release, so it is built and distributed once and reused across "
+                    "releases; profile checks it was built from the same gene file "
+                    "the release's catalog was annotated from.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    p.add_argument("--genes", required=True, metavar="FNA[.GZ]",
+                   help="The nucleotide gene FASTA the catalog was annotated from.")
+    p.add_argument("-o", "--out_dir", required=True, metavar="DIR")
+    p.add_argument("--aligner", default="bwa-mem3", choices=["bwa-mem3", "bwa-mem2", "bwa"])
+    p.add_argument("--aligner_bin", default=None, metavar="EXE")
 
 
 def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:

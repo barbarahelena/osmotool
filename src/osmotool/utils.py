@@ -8,7 +8,7 @@ import logging
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 log = logging.getLogger("osmotool")
@@ -134,6 +134,7 @@ class RefDb:
     markers: MarkerDb | None = None   # markers/ (profile only)
     nacl_model: Path | None = None    # nacl_model/ directory (annotate only)
     report_levels: Path | None = None  # osmo_refdb.profile_report_levels.tsv (profile only)
+    catalogs: dict[str, Path] = field(default_factory=dict)  # catalogs/<name>/ (profile only)
 
 
 def _resolve_markers(root: Path) -> MarkerDb | None:
@@ -175,6 +176,31 @@ def _resolve_nacl_model(root: Path) -> Path | None:
     return d
 
 
+def _resolve_catalogs(root: Path) -> dict[str, Path]:
+    """{name: directory} for every gene catalog the release ships under
+    catalogs/<name>/ (osmo_refdb pipeline/14_package_catalog.py): index,
+    annotation and catalog.json built with this release's HMMs, packaged and
+    versioned with the release. Releases without catalogs/ ship none."""
+    d = root / "catalogs"
+    if not d.is_dir():
+        return {}
+    return {sub.name: sub for sub in sorted(d.iterdir())
+            if sub.is_dir() and (sub / "catalog.json").exists()}
+
+
+def select_catalog(refdb: RefDb, value: str) -> Path:
+    """`profile --catalog VALUE`: the name of a catalog the release ships, or
+    the path of a catalog directory built separately with `build-catalog`."""
+    if value in refdb.catalogs:
+        return refdb.catalogs[value]
+    path = Path(value)
+    if (path / "catalog.json").exists():
+        return path
+    shipped = ", ".join(refdb.catalogs) or "none"
+    raise ValueError(f"--catalog {value}: neither a catalog this release ships ({shipped}) "
+                     "nor a catalog directory (no catalog.json)")
+
+
 def resolve_refdb(database: str, mode: str) -> RefDb:
     """Resolve an osmo_refdb release directory into its fixed-name files.
 
@@ -188,7 +214,8 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
     one directory instead of wiring up each file individually. In profile
     mode it also resolves ``osmo_refdb.train_refs.faa``, the optional
     ``markers/`` subdirectory used for copies-per-genome normalisation and
-    the optional ``osmo_refdb.profile_report_levels.tsv`` (v10+); in
+    the optional ``osmo_refdb.profile_report_levels.tsv`` (v10+) and the
+    gene catalogs under ``catalogs/<name>/`` for ``--catalog``; in
     annotate mode, the optional ``nacl_model/`` subdirectory (NaCl-max
     predictor, see nacl.py).
 
@@ -227,7 +254,7 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
     if exclude_families is not None and not exclude_families.exists():
         exclude_families = None
 
-    train_refs, markers, nacl_model, report_levels = None, None, None, None
+    train_refs, markers, nacl_model, report_levels, catalogs = None, None, None, None, {}
     if mode == "annotate":
         nacl_model = _resolve_nacl_model(root)
     if mode == "profile":
@@ -238,10 +265,11 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
         report_levels = root / "osmo_refdb.profile_report_levels.tsv"
         if not report_levels.exists():
             report_levels = None
+        catalogs = _resolve_catalogs(root)
 
     return RefDb(
         dmnd=dmnd, hmm=hmm, cascade_config=cascade_config,
         diamond_cutoffs=diamond_cutoffs, exclude_families=exclude_families,
         train_refs=train_refs, markers=markers, nacl_model=nacl_model,
-        report_levels=report_levels,
+        report_levels=report_levels, catalogs=catalogs,
     )
