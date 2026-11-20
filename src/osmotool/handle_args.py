@@ -358,7 +358,7 @@ def _add_build_catalog_parser(sub: argparse._SubParsersAction) -> None:
                         "none: annotation only, used with a full index from "
                         "`osmotool index-catalog` (profile --catalog_index).")
     p.add_argument("--min_protein_length", type=int, default=30, metavar="AA")
-    p.add_argument("--min_model_cover", type=float, default=0.4, metavar="FRACTION",
+    p.add_argument("--min_model_cover", type=float, default=1.0, metavar="FRACTION",
                    help="A gene covering at least this share of a model passes at the "
                         "gathering cutoff scaled by its cover, so genes cut at contig "
                         "ends are judged by score per model position, like complete "

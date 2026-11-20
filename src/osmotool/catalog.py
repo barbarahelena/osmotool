@@ -110,7 +110,7 @@ NEIGHBOUR_MIN_IDENTITY, NEIGHBOUR_MIN_ALIGNED = 0.90, 45
 # the gene. A complete protein that shares one domain with a multi-domain
 # model (another ABC ATPase against opuBA) leaves the model out where it goes
 # on, and is judged at the full cutoff. min_model_cover=1.0 turns it off.
-MIN_MODEL_COVER = 0.4
+MIN_MODEL_COVER = 1.0     # off by default: not yet calibrated per family
 MODEL_END_SLACK = 10    # model positions short of an end that still count as reaching it
 GENE_END_SLACK = 10     # gene residues short of an end that still count as the gene's end
 
