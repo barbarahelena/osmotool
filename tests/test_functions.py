@@ -215,3 +215,71 @@ class TestStripOrfSuffix:
 
     def test_non_orfm_id_passes_through(self):
         assert strip_orf_suffix("not_an_orf") == "not_an_orf"
+
+
+# ---------------------------------------------------------------------------
+# orfm minimum ORF length for short reads (cascade crash on 73-75 bp reads)
+# ---------------------------------------------------------------------------
+
+import shutil
+from unittest import mock
+
+from osmotool.functions import (
+    ORFM_DEFAULT_MIN_LEN,
+    fasta_has_sequences,
+    orfm_min_length,
+    run_orfm,
+)
+
+
+class TestOrfmMinLength:
+    @pytest.mark.parametrize("read_length, expected", [
+        (150, 96),   # long reads keep orfm's default
+        (98, 96),    # shortest read that still fits 96 nt in every frame
+        (97, 93),
+        (75, 72),
+        (73, 69),
+        (4, 3),      # floored at a valid multiple of 3
+        (1, 3),
+    ])
+    def test_values(self, read_length, expected):
+        got = orfm_min_length(read_length)
+        assert got == expected
+        assert got % 3 == 0
+        assert got <= ORFM_DEFAULT_MIN_LEN
+
+    @pytest.mark.parametrize("bad", [0, -3, 70])
+    def test_run_orfm_rejects_invalid_min_len(self, tmp_path, bad):
+        with pytest.raises(ValueError):
+            run_orfm(tmp_path / "in.fastq", tmp_path / "out.faa", min_orf_len=bad)
+
+    def test_run_orfm_passes_min_len(self, tmp_path):
+        with mock.patch("osmotool.functions.subprocess.run") as run:
+            run.return_value.returncode = 0
+            run_orfm(tmp_path / "in.fastq", tmp_path / "out.faa", min_orf_len=69)
+        cmd = run.call_args.args[0]
+        assert cmd[:3] == ["orfm", "-m", "69"]
+
+    @pytest.mark.skipif(shutil.which("orfm") is None, reason="orfm not on PATH")
+    def test_short_reads_yield_orfs_with_scaled_min_len(self, tmp_path):
+        # 75 bp of stop-free sequence in all frames ("GCT" repeats)
+        fq = tmp_path / "short.fastq"
+        seq = ("GCT" * 25)
+        fq.write_text(f"@r1\n{seq}\n+\n{'I' * len(seq)}\n")
+        default_out = run_orfm(fq, tmp_path / "default.faa")
+        assert not fasta_has_sequences(default_out)
+        scaled = run_orfm(fq, tmp_path / "scaled.faa",
+                          min_orf_len=orfm_min_length(len(seq)))
+        assert fasta_has_sequences(scaled)
+
+
+class TestFastaHasSequences:
+    def test_empty(self, tmp_path):
+        p = tmp_path / "e.faa"
+        p.write_text("")
+        assert not fasta_has_sequences(p)
+
+    def test_with_record(self, tmp_path):
+        p = tmp_path / "r.faa"
+        p.write_text(">orf1\nMKV\n")
+        assert fasta_has_sequences(p)

@@ -17,6 +17,9 @@ from osmotool.functions import (
     run_diamond_blastp,
     run_hmmsearch,
     run_orfm,
+    orfm_min_length,
+    ORFM_DEFAULT_MIN_LEN,
+    fasta_has_sequences,
     run_prodigal,
     parse_diamond_output,
     parse_hmmsearch_output,
@@ -487,14 +490,38 @@ def _apply_profile_cascade(
     # files, so it needs untagged ids -- see this function's docstring.
     extract_fastq_subset(input_files, {strip_mate_tag(qid) for qid in flagged_qids}, subset_fastq)
 
+    # orfm's default -m 96 can't fit in reads < 98 bp (old GAIIx runs are
+    # 73-75 bp), which left orfs_faa empty and crashed hmmsearch -- scale
+    # it down to what the subset's reads can hold (see orfm_min_length).
+    try:
+        subset_read_len = median_read_length([subset_fastq])
+        min_orf_len = orfm_min_length(subset_read_len)
+    except ValueError:  # empty subset: orfm yields nothing, handled below
+        min_orf_len = ORFM_DEFAULT_MIN_LEN
+    if min_orf_len < ORFM_DEFAULT_MIN_LEN:
+        log.warning("Cascade: median read length %d bp is too short for orfm's default "
+                    "-m %d; using -m %d. The cascade cutoffs were calibrated at -m %d, so "
+                    "short ORFs score lower and more flagged reads may be dropped.",
+                    subset_read_len, ORFM_DEFAULT_MIN_LEN, min_orf_len, ORFM_DEFAULT_MIN_LEN)
+
     orfs_faa = Path(str(out_prefix) + ".cascade.orfs.faa")
-    run_orfm(subset_fastq, orfs_faa)
+    run_orfm(subset_fastq, orfs_faa, min_orf_len=min_orf_len)
 
     hmm_tblout = Path(str(out_prefix) + ".cascade.hmmsearch.tblout")
-    run_hmmsearch(hmm_db, orfs_faa, hmm_tblout, threads=threads, use_cut_ga=False)
-
     cascade_scores: dict[str, dict[str, float]] = {}
-    for hit in parse_hmmsearch_output(hmm_tblout):
+    if fasta_has_sequences(orfs_faa):
+        run_hmmsearch(hmm_db, orfs_faa, hmm_tblout, threads=threads, use_cut_ga=False)
+        hmm_hits = parse_hmmsearch_output(hmm_tblout)
+    else:
+        # hmmsearch exits 1 on an empty FASTA. No ORFs means no HMM
+        # evidence for any flagged read, so apply_cascade_check scores
+        # them all 0 and drops them -- the same outcome as a read that
+        # yields no ORF while others do.
+        log.warning("Cascade: orfm called no ORFs from the %d flagged reads; skipping "
+                    "hmmsearch, so all of them are dropped.", len(flagged_qids))
+        hmm_hits = iter(())
+
+    for hit in hmm_hits:
         read_id = strip_orf_suffix(hit["qseqid"])
         family = hit["sseqid"]
         per_read = cascade_scores.setdefault(read_id, {})
