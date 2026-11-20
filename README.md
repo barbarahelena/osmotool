@@ -253,17 +253,33 @@ osmotool predict-nacl /path/to/osmo_refdb/releases/v10 \
 `profile` mode:
 
 ```
-# total_reads    1000000
-# filtered_reads 42753
+# total_fragments    1000000
+# filtered_fragments 42753.5
 gene    raw_count   rpm
 UniRef90_A0A000   12.5    3.21
 UniRef90_A0A001    4.0    1.05
 ```
 
-**RPM** = `(raw_count × 10⁶) / total_reads` — reads are not assembled, so no gene
+**RPM** = `(raw_count × 10⁶) / total_fragments` — reads are not assembled, so no gene
 length is available and no per-length correction is applied. This is a real
 sequencing-depth-normalised abundance estimate: it corrects for how many reads a
 sample happened to be sequenced to.
+
+**Counts are in fragments**, for both read layouts. A fragment is a read pair
+(paired-end) or a read (single-end). Each mate of a pair counts as 0.5, and
+`total_fragments` is the number of pairs (R1's read count), so a paired-end
+library and the same library run single-end give the same RPM.
+`filtered_fragments` (fragments with any alignment) is weighted the same way.
+
+> **Changed after v0.9.0:** earlier versions divided paired-end counts by the
+> reads in R1 + R2, so paired-end RPM was half of what single-end gave, and
+> `pct_reads_assigned` could not exceed 50%. Paired-end RPM is now 2× its old
+> value; single-end is unchanged. The header lines and `aln_stats.tsv` keys
+> were renamed (`total_reads` → `total_fragments`, `filtered_reads` →
+> `filtered_fragments`, `reads_assigned` → `fragments_assigned`,
+> `pct_reads_assigned` → `pct_fragments_assigned`) so old and new outputs
+> can't be mixed by accident. `copies_per_genome` is a ratio to marker genes
+> counted the same way and is unaffected.
 
 ### Copies per genome (`profile` mode)
 
@@ -340,8 +356,8 @@ filtering (DIAMOND identity/coverage/per-family cutoffs, or the HMM gathering
 threshold), counted before each protein's best hit is chosen and before decoy
 families are dropped. It can therefore be slightly higher than the sum of
 `raw_count`. `filtered_reads` holds the same number; it is the name profile mode
-uses and is kept so existing parsers keep working. Prefer `proteins_with_hits` in
-new code.
+used before it counted fragments, and is kept so existing parsers keep working.
+Prefer `proteins_with_hits` in new code.
 
 **copies_per_kb** = `(raw_count × 10⁹) / (gene_length_bp × total_proteins)`, using
 protein lengths from Prodigal.
@@ -356,7 +372,8 @@ comparing a family's representation across genomes of different sizes, but **not
 directly comparable to `profile` mode's RPM values, which measure something
 different (community-level read abundance).
 
-**Paired-end counting**: each read of a pair counts as 0.5 (one read pair = one fragment).
+**Paired-end counting** (`profile`): each read of a pair counts as 0.5 (one read pair = one
+fragment), and RPM's denominator is pairs; see [`gene_counts.tsv` format](#gene_countstsv-format).
 
 ### Report units (`profile` mode)
 
@@ -369,9 +386,9 @@ When the release has it, `profile` writes `<prefix>.unit_counts.tsv` next to
 `gene_counts.tsv`:
 
 ```
-# total_reads    1000000
-# filtered_reads 42753
-# report_levels  releases/v10/osmo_refdb.profile_report_levels.tsv
+# total_fragments    1000000
+# filtered_fragments 42753.5
+# report_levels      releases/v10/osmo_refdb.profile_report_levels.tsv
 unit          report_level  members            status    raw_count  RPM    [copies_per_genome]
 ectA          gene          ectA               reported  12.5       12.5
 opu_permease  group         opuAB,opuBB,opuCB  reported  4.0        4
@@ -736,7 +753,8 @@ assembly+binning step) on the same samples.
 | `--evalue` | 1e-5 | Max e-value |
 | `--threads` | 4 | Threads for DIAMOND |
 | `--tmpdir` | `$TMPDIR` | Temp directory for merged paired-end FASTQ |
-| `--total_reads` | *(counted)* | Skip read counting when count is already known |
+| `--total_fragments` | *(counted)* | `profile` only. Skip counting the input: read **pairs** for paired-end (R1's read count), reads for single-end |
+| `--total_reads` | *(counted)* | `profile` only. Alternative to `--total_fragments`: reads summed over all input files (R1 + R2), halved for paired-end |
 | `--method` | `hmm` (annotate only) | `diamond`, `hmm`, or `both`. `profile` is DIAMOND-only (HMM's GA cutoffs don't apply to short read fragments); `annotate` defaults to HMM since it's meaningfully more specific on full-length ORFs. Requires `hmms/osmo_refdb.hmm` present in `DATABASE` for `hmm`/`both` |
 | `--no_cascade` | off (cascade on by default) | `profile` only. Disables the DIAMOND+HMM cascade, which by default gives reads whose DIAMOND call lands on a family with demonstrated precision problems (several as low as 5-25% DIAMOND-only precision) a second opinion from `hmmsearch`, using `DATABASE`'s `osmo_refdb.profile_cascade.tsv` + `hmms/osmo_refdb.hmm`. The cascade requires `orfm`+`hmmsearch` on PATH and both files present in `DATABASE`; pass this flag to run DIAMOND-only if you don't have them |
 | `--no_markers` | off (on whenever `DATABASE` has `markers/`) | `profile` only. Skips the marker-gene DIAMOND pass and the `copies_per_genome` column / `markers.tsv` (see [Copies per genome](#copies-per-genome-profile-mode)) |
@@ -791,14 +809,15 @@ osmotool profile \
     --out_prefix results/${SAMPLE} \
     --threads ${SLURM_CPUS_PER_TASK} \
     --tmpdir ${TMPDIR} \
-    --total_reads ${NREADS}   # pass from MultiQC if available
+    --total_fragments ${NPAIRS}   # R1's read count, from MultiQC if available
 ```
 
 `$TMPDIR` is set by SLURM to fast node-local scratch — merged paired-end
 FASTQ lands there instead of on the shared filesystem.
 
-`--total_reads` accepts a pre-computed count (e.g. from FastQC/MultiQC)
-to skip the `zcat | wc -l` step on very large files.
+`--total_fragments` accepts a pre-computed count (e.g. from FastQC/MultiQC)
+to skip the `zcat | wc -l` step on very large files: for paired-end, the read
+count of R1 alone (= pairs), not R1 + R2. `--total_reads` takes R1 + R2 instead.
 
 ## Versioning
 

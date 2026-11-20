@@ -241,7 +241,7 @@ def test_unit_counts_file_with_sources(tmp_path: Path):
     counts = {"ectA": 3.0, "opuAC": 4.0}
     sources = {"ectA": (2.0, 0.5, 1.0), "opuAC": (1.5, 0.0, 2.5)}
     rows = aggregate_report_units(UNITS, counts, counts, sources=sources)
-    lines = write_unit_counts(tmp_path / "s", rows, total_reads=10, filtered_reads=5,
+    lines = write_unit_counts(tmp_path / "s", rows, total_fragments=10, filtered_fragments=5,
                               report_levels="r.tsv", with_sources=True).read_text().splitlines()
     assert lines[3].endswith("RPM\tcatalog_count\tcatalog_ambiguous\ttranslated_count")
     assert lines[4] == "ectA\tgene\tectA\treported\t3.0\t3\t2.0\t0.50\t1.0"

@@ -9,6 +9,8 @@ Counting rules
   evalue, then by lexicographic subject ID order for reproducibility.
 * **Paired-end weighting**: each read in a pair contributes 0.5 counts,
   so one read *pair* = 1 fragment count.  Single-end reads contribute 1.0.
+  Counts are therefore in fragments for both layouts, and so is profile's
+  RPM denominator (functions.count_fragments: pairs, or single-end reads).
 * **Gene family roll-up**: subjects are mapped to their gene-family label
   (first '|'-delimited field of the subject ID).  Final counts are
   summed per family.
@@ -17,7 +19,7 @@ Normalisation
 -------------
 * **RPM** (``profile`` mode — reads vs. a database, no gene lengths
   available): a real depth-normalised abundance estimate.
-    RPM = (raw_count × 10⁶) / total_reads
+    RPM = (raw_count × 10⁶) / total_fragments
 * **copies_per_kb** (``annotate`` mode — protein lengths from Prodigal
   available): despite reusing RPM/RPKM's formula shape, this is
   gene-family copy number normalised by length and by the total number
@@ -351,7 +353,9 @@ def compute_rpm(
     """
     RPM = (raw_count × 10⁶) / total_reads
 
-    Used in ``profile`` mode where gene lengths are unavailable.
+    Used in ``profile`` mode where gene lengths are unavailable, with
+    *total_reads* the number of fragments (read pairs, or single-end reads)
+    so it is in the same unit as count_hits' paired-weighted counts.
     """
     if total_reads == 0:
         return {fam: 0.0 for fam in counts}

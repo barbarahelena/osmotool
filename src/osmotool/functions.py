@@ -883,33 +883,44 @@ def parse_orf_coordinates(proteins_faa: str | Path) -> dict[str, OrfCoord]:
     return coords
 
 
-def count_reads(
+def count_fragments(
     reads1: str | Path | None,
     reads2: str | Path | None,
     singles: str | Path | None,
-) -> int:
+) -> int | float:
     """
-    Count total reads across input FASTQ files (handles .gz).
+    Sequenced fragments in the input: reads for single-end, read pairs for
+    paired-end. This is profile's RPM denominator, in the same unit as its
+    counts (each mate of a pair weighs 0.5, quantifier.count_hits), so a
+    paired-end library and its R1 run as single-end get the same RPM.
 
-    Uses ``zcat | wc -l`` (gzipped) or ``wc -l`` (plain) via the shell —
-    far faster than iterating in Python on the large files common on HPC.
-    FASTQ has 4 lines per read, so read count = line count / 4.
+    Paired-end files with different read counts (truncated or trimmed out
+    of sync) are warned about, and count (n1 + n2) / 2 -- the sum of the
+    read weights, so the numerator and denominator stay consistent.
 
-    Falls back to pure-Python iteration if the shell command fails
-    (e.g. ``zcat`` not available).
+    Reads are counted with ``zcat | wc -l`` (gzipped) or ``wc -l`` (plain)
+    via the shell -- far faster than iterating in Python on the large files
+    common on HPC -- falling back to pure Python if that fails.
     """
-    files: list[Path] = []
-    if reads1 is not None:
-        files.append(Path(reads1))
-    if reads2 is not None:
-        files.append(Path(reads2))
-    if singles is not None:
-        files.append(Path(singles))
+    if reads1 is not None and reads2 is not None:
+        n1, n2 = _count_reads_file(Path(reads1)), _count_reads_file(Path(reads2))
+        if n1 != n2:
+            log.warning("R1 has %d reads but R2 has %d: the files are out of sync; "
+                        "counting %s fragments.", n1, n2, (n1 + n2) / 2)
+        return fragments_from_reads(n1 + n2, paired=True)
+    path = singles if singles is not None else reads1
+    if path is None:
+        raise ValueError("Provide either --singles or -1/--reads1 (with optional -2/--reads2).")
+    return _count_reads_file(Path(path))
 
-    total = 0
-    for path in files:
-        total += _count_reads_file(path)
-    return total
+
+def fragments_from_reads(total_reads: int, *, paired: bool) -> int | float:
+    """Fragments from a read count summed over all input files (R1 + R2
+    for paired-end): profile's --total_reads, converted to the unit of its
+    counts and RPM denominator (count_fragments)."""
+    if not paired:
+        return total_reads
+    return total_reads // 2 if total_reads % 2 == 0 else total_reads / 2
 
 
 def _count_reads_file(path: Path) -> int:
