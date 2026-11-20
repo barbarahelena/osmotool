@@ -191,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
                 decoy_models=decoys, release=args.database, threads=args.threads,
                 min_protein_length=args.min_protein_length, evalue=args.evalue,
                 aligner=args.aligner, aligner_bin=args.aligner_bin, index=args.index,
+                min_model_cover=args.min_model_cover,
             ))
 
         elif args.subcommand == "index-catalog":

@@ -13,8 +13,9 @@ from pathlib import Path
 import pytest
 
 from osmotool.catalog import (
-    ALIGNERS, ANNOTATED, BACKGROUND, DECOY, HOMOLOG, INDEX_META, Catalog, CatalogGene,
-    alternative_placements, assign_gene, classify_alignment, find_neighbours, load_catalog,
+    cut_where_model_is_missing, ALIGNERS, ANNOTATED, BACKGROUND, DECOY, HOMOLOG, INDEX_META, Catalog, CatalogGene,
+    alternative_placements, assign_gene, classify_alignment, find_neighbours, gene_cutoff,
+    load_catalog, model_cover,
     neighbour_windows, norm_read_id, parse_domtblout, read_ga_cutoffs, select_neighbours,
     settle_records, translate, write_fallback_fastq,
 )
@@ -75,6 +76,83 @@ def test_parse_and_assign(tmp_path: Path):
     assert (a4["label"], a4["status"], a4["env_aa"]) == ("ectA", ANNOTATED, (5, 305))
     a5 = assign_gene(hits["g5"], GA, {"pep_decoy"})          # fused: ectB kept as other region
     assert a5["label"] == "ectA" and a5["others"] == [("ectB", (255, 590))]
+
+
+# Partial genes: ectA's model is 180 positions long, GA 25.
+PARTIAL = (
+    # p1: a close ectA cut in half (model 1-90): 22 bits, under GA 25, over 25 x 0.5
+    "p1 - 95 ectA - 180 1e-6 22.0 0.1 1 1 1e-7 1e-7 21.0 0.1 1 90 3 92 1 95 0.9 -\n"
+    # p2: a distant confuser cut in half: 10 bits, under 25 x 0.5
+    "p2 - 95 ectA - 180 1e-3 10.0 0.1 1 1 1e-4 1e-4 9.5 0.1 91 180 3 92 1 95 0.9 -\n"
+    # p3: a fragment under the floor (54 of 180 = 0.3): the full GA applies
+    "p3 - 60 ectA - 180 1e-5 20.0 0.1 1 1 1e-6 1e-6 19.5 0.1 1 54 3 56 1 60 0.9 -\n"
+    # p4: a partial ectA (scaled pass) that a complete decoy outscores
+    "p4 - 300 ectA - 180 1e-8 30.0 0.1 1 1 1e-9 1e-9 29.0 0.1 1 90 3 92 1 95 0.9 -\n"
+    "p4 - 300 pep_decoy - 250 1e-20 60.0 0.1 1 1 1e-21 1e-21 59.0 0.1 1 250 2 260 1 262 0.9 -\n"
+    # p5: two domains overlapping on the model (1-60, 40-120): cover 120/180
+    "p5 - 185 ectA - 180 1e-6 20.0 0.1 1 2 1e-4 1e-4 10.0 0.1 1 60 3 62 1 65 0.9 -\n"
+    "p5 - 185 ectA - 180 1e-6 20.0 0.1 2 2 1e-4 1e-4 10.0 0.1 40 120 100 180 98 182 0.9 -\n"
+    # p6: a complete 400-aa protein sharing ectA's first half (goes on past the model)
+    "p6 - 400 ectA - 180 1e-6 22.0 0.1 1 1 1e-7 1e-7 21.0 0.1 1 90 3 92 1 95 0.9 -\n"
+    # p7: cut at its start, where the model's start is missing (model 91-180, gene 1-95)
+    "p7 - 95 ectA - 180 1e-6 22.0 0.1 1 1 1e-7 1e-7 21.0 0.1 91 180 1 92 1 93 0.9 -\n"
+)
+
+
+def test_model_cover_is_the_union_of_the_model_spans(tmp_path: Path):
+    p = tmp_path / "d.tbl"
+    p.write_text(DOMTBL + PARTIAL)
+    hits = parse_domtblout(p)
+    assert model_cover(hits["g1"]["ectA"]) == 1.0
+    assert model_cover(hits["g4"]["ectA"]) == 1.0                 # 1-90 + 91-180
+    assert model_cover(hits["p1"]["ectA"]) == pytest.approx(0.5)
+    assert model_cover(hits["p5"]["ectA"]) == pytest.approx(120 / 180)
+    assert model_cover({"score": 1.0, "domains": []}) == 1.0      # no model coordinates
+
+
+def test_cut_where_model_is_missing(tmp_path: Path):
+    p = tmp_path / "d.tbl"
+    p.write_text(DOMTBL + PARTIAL)
+    hits = parse_domtblout(p)
+    assert cut_where_model_is_missing(hits["g1"]["ectA"])         # whole model
+    assert cut_where_model_is_missing(hits["p1"]["ectA"])         # model end missing, gene ends
+    assert cut_where_model_is_missing(hits["p7"]["ectA"])         # model start missing, gene starts
+    assert not cut_where_model_is_missing(hits["p6"]["ectA"])     # the gene goes on
+    assert not cut_where_model_is_missing(hits["g2"]["ectA"])     # 150 aa, alignment ends at 104
+    assert not cut_where_model_is_missing({"score": 1.0, "domains": []})
+
+
+def test_gene_cutoff():
+    assert gene_cutoff(25.0, 0.5, 0.4) == pytest.approx(12.5)
+    assert gene_cutoff(25.0, 1.0, 0.4) == 25.0
+    assert gene_cutoff(25.0, 0.3, 0.4) == 25.0                    # under the floor
+    assert gene_cutoff(25.0, 0.5, 1.0) == 25.0                    # scaling off
+
+
+def test_partial_genes_pass_at_the_scaled_cutoff(tmp_path: Path):
+    p = tmp_path / "d.tbl"
+    p.write_text(DOMTBL + PARTIAL)
+    hits = parse_domtblout(p)
+    assign = lambda g, **kw: assign_gene(hits[g], GA, {"pep_decoy"}, **kw)
+    # without scaling (the default) every partial gene meets the full GA
+    assert assign("p1")["status"] == HOMOLOG
+    a = assign("p1", min_cover=0.4)
+    assert (a["label"], a["status"]) == ("ectA", ANNOTATED)
+    assert a["model_cover"] == pytest.approx(0.5)
+    assert assign("p2", min_cover=0.4)["status"] == HOMOLOG       # 10 < 12.5
+    assert assign("p3", min_cover=0.4)["status"] == HOMOLOG       # cover 0.3 < 0.4: GA 25
+    a = assign("p4", min_cover=0.4)                               # the decoy still wins
+    assert (a["label"], a["status"]) == ("pep_decoy", DECOY)
+    assert assign("p5", min_cover=0.4)["label"] == "ectA"         # 20 >= 25 x 2/3
+    a = assign("p6", min_cover=0.4)                               # not cut: full GA 25
+    assert a["status"] == HOMOLOG and not a["cut"]
+    a = assign("p7", min_cover=0.4)
+    assert (a["label"], a["cut"]) == ("ectA", True)
+    # the default is the full GA for every gene
+    for g in ("g1", "g2", "g3", "g4", "g5"):
+        assert assign(g) == assign(g, min_cover=1.0)
+    assert assign("g1", min_cover=0.4)["label"] == "ectA"
+    assert assign("g3", min_cover=0.4)["status"] == DECOY
 
 
 # ---------------------------------------------------------------------------
