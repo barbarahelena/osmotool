@@ -350,3 +350,49 @@ class TestExtractGeneCoordinates:
 
     def test_empty_best_hits(self):
         assert extract_gene_coordinates({}, {"NODE_1_1": _coord()}) == []
+
+
+# ---------------------------------------------------------------------------
+# profile cascade: orfm calling no ORFs must not crash (hmmsearch exits 1
+# on an empty FASTA); flagged reads are dropped, others kept
+# ---------------------------------------------------------------------------
+
+from pathlib import Path
+from unittest import mock as _mock
+
+from osmotool import runners as _runners
+
+
+class TestCascadeNoOrfs:
+    def _setup(self, tmp_path):
+        seq = "ACGT" * 18 + "A"  # 73 bp, as in ERR321537
+        fq = tmp_path / "reads.fastq"
+        fq.write_text(
+            f"@flag1\n{seq}\n+\n{'I' * len(seq)}\n"
+            f"@keep1\n{seq}\n+\n{'I' * len(seq)}\n"
+        )
+        cfg = tmp_path / "cascade.tsv"
+        cfg.write_text("family\tneeds_cascade_check\thmm_short_read_threshold\n"
+                       "betA\tyes\t20\n")
+        best_hits = {
+            "flag1": {"qseqid": "flag1", "sseqid": "betA|X|y", "bitscore": 50.0},
+            "keep1": {"qseqid": "keep1", "sseqid": "ectA|X|y", "bitscore": 50.0},
+        }
+        return fq, cfg, best_hits
+
+    def test_empty_orfs_skips_hmmsearch(self, tmp_path):
+        fq, cfg, best_hits = self._setup(tmp_path)
+
+        def fake_orfm(fastq, out_faa, *, min_orf_len):
+            assert min_orf_len == 69  # scaled for 73 bp reads
+            Path(out_faa).write_text("")
+            return Path(out_faa)
+
+        with _mock.patch.object(_runners, "run_orfm", side_effect=fake_orfm), \
+             _mock.patch.object(_runners, "run_hmmsearch") as hmm:
+            kept = _runners._apply_profile_cascade(
+                best_hits, None, None, str(fq), "unused.hmm", str(cfg),
+                str(tmp_path / "s"), 1, False,
+            )
+        hmm.assert_not_called()
+        assert set(kept) == {"keep1"}

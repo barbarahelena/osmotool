@@ -397,19 +397,60 @@ def strip_mate_tag(read_id: str) -> str:
     return read_id
 
 
-def run_orfm(fastq_path: str | Path, out_faa: str | Path) -> Path:
+# orfm's default minimum ORF length (nt). osmo_refdb's cascade cutoffs were
+# calibrated with it, so it stays the value for any read long enough to
+# hold one.
+ORFM_DEFAULT_MIN_LEN = 96
+
+
+def orfm_min_length(read_length: int) -> int:
+    """
+    The orfm -m (minimum ORF length, nt) to use for reads of *read_length*
+    bp: orfm's default 96 when a read can hold an ORF that long in every
+    frame, otherwise the longest multiple of 3 that fits in all three
+    frames of the read (3 * floor((L - 2) / 3)).
+
+    Without this, reads shorter than 98 bp (e.g. 73-75 bp GAIIx runs) can
+    never yield a 96-nt ORF, orfm writes an empty FASTA, and the cascade
+    has nothing to score. Reads >= 98 bp keep the default, so their
+    output is unchanged. orfm requires -m to be a multiple of 3; the
+    result is floored at 3 so very short reads still give a valid value.
+    """
+    fit = 3 * ((read_length - 2) // 3)
+    return max(3, min(ORFM_DEFAULT_MIN_LEN, fit))
+
+
+def fasta_has_sequences(path: str | Path) -> bool:
+    """True if *path* contains at least one FASTA header line."""
+    with open(path) as fh:
+        return any(line.startswith(">") for line in fh)
+
+
+def run_orfm(
+    fastq_path: str | Path,
+    out_faa: str | Path,
+    *,
+    min_orf_len: int = ORFM_DEFAULT_MIN_LEN,
+) -> Path:
     """
     6-frame-translate *fastq_path* with ``orfm``, matching osmo_refdb's own
     pipeline/translate_and_hmmscan.sh usage. Used by `profile`'s
     DIAMOND+HMM cascade to translate just the subset of reads that need a
     second opinion (see extract_fastq_subset), not the whole input.
+
+    min_orf_len is passed as orfm -m (nt, must be a multiple of 3); see
+    orfm_min_length() for choosing it from the read length.
     """
     out_faa = Path(out_faa)
     fastq_path = Path(fastq_path)
+    if min_orf_len <= 0 or min_orf_len % 3 != 0:
+        raise ValueError(f"orfm min ORF length must be a positive multiple of 3, got {min_orf_len}")
 
-    log.info("Running orfm → %s", out_faa)
+    cmd = ["orfm", "-m", str(min_orf_len), str(fastq_path)]
+    log.info("Running orfm (-m %d) → %s", min_orf_len, out_faa)
+    log.debug("Command: %s", " ".join(cmd))
     with open(out_faa, "w") as out_fh:
-        result = subprocess.run(["orfm", str(fastq_path)], stdout=out_fh)
+        result = subprocess.run(cmd, stdout=out_fh)
     if result.returncode != 0:
         raise RuntimeError(f"orfm failed (exit {result.returncode})")
 
