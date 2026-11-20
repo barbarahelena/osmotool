@@ -283,3 +283,62 @@ class TestFastaHasSequences:
         p = tmp_path / "r.faa"
         p.write_text(">orf1\nMKV\n")
         assert fasta_has_sequences(p)
+
+
+# ---------------------------------------------------------------------------
+# count_fragments / fragments_from_reads: profile's RPM denominator
+# ---------------------------------------------------------------------------
+
+from osmotool.functions import count_fragments, fragments_from_reads
+from osmotool.quantifier import compute_rpm, count_hits
+
+
+def _write_fastq(path: Path, ids: list[str]) -> Path:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "wt") as fh:
+        for rid in ids:
+            fh.write(f"@{rid}\nACGT\n+\nIIII\n")
+    return path
+
+
+class TestCountFragments:
+    def test_paired_counts_pairs(self, tmp_path):
+        r1 = _write_fastq(tmp_path / "R1.fastq.gz", [f"r{i}" for i in range(6)])
+        r2 = _write_fastq(tmp_path / "R2.fastq.gz", [f"r{i}" for i in range(6)])
+        assert count_fragments(r1, r2, None) == 6
+
+    def test_single_end_counts_reads(self, tmp_path):
+        se = _write_fastq(tmp_path / "se.fastq", [f"r{i}" for i in range(5)])
+        assert count_fragments(None, None, se) == 5
+        assert count_fragments(se, None, None) == 5  # -1 without -2
+
+    def test_out_of_sync_pairs_warn_and_halve_the_sum(self, tmp_path, caplog):
+        r1 = _write_fastq(tmp_path / "R1.fastq", [f"r{i}" for i in range(6)])
+        r2 = _write_fastq(tmp_path / "R2.fastq", [f"r{i}" for i in range(5)])
+        assert count_fragments(r1, r2, None) == 5.5
+        assert "out of sync" in caplog.text
+
+    def test_no_input_raises(self):
+        with pytest.raises(ValueError):
+            count_fragments(None, None, None)
+
+    @pytest.mark.parametrize("reads, paired, expected", [
+        (1000, True, 500), (1001, True, 500.5), (1000, False, 1000),
+    ])
+    def test_fragments_from_reads(self, reads, paired, expected):
+        assert fragments_from_reads(reads, paired=paired) == expected
+
+    def test_paired_and_single_end_rpm_agree(self, tmp_path):
+        """One library, run paired-end and as R1-only single-end, gives the
+        same RPM: counts (0.5 per mate) and denominator (pairs) are both
+        fragments. Before this fix paired-end RPM was half."""
+        ids = [f"r{i}" for i in range(10)]
+        r1 = _write_fastq(tmp_path / "R1.fastq", ids)
+        r2 = _write_fastq(tmp_path / "R2.fastq", ids)
+        # 4 R1 reads and 4 R2 reads hit ectA: same per-read hit rate in both mates
+        pe_hits = {f"{rid}{tag}": {"sseqid": "ectA|ref"}
+                   for rid in ids[:4] for tag in ("_R1", "_R2")}
+        se_hits = {rid: {"sseqid": "ectA|ref"} for rid in ids[:4]}
+        pe = compute_rpm(count_hits(pe_hits, paired=True), count_fragments(r1, r2, None))
+        se = compute_rpm(count_hits(se_hits, paired=False), count_fragments(r1, None, None))
+        assert pe["ectA"] == pytest.approx(se["ectA"]) == pytest.approx(400_000)

@@ -13,7 +13,7 @@ from osmotool.runners import run_profile, run_annotate
 from osmotool.download import download_refdb
 from osmotool.utils import setup_logging, resolve_refdb, check_tool, default_catalog
 from osmotool.catalog import build_catalog, index_catalog, load_catalog
-from osmotool.functions import load_excluded_families
+from osmotool.functions import fragments_from_reads, load_excluded_families
 from osmotool.nacl import (annotate_method_and_release, load_nacl_model,
                            predict_from_prefix, write_prediction_table)
 
@@ -30,6 +30,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.subcommand == "profile":
             if args.reads2 is not None and args.reads1 is None:
                 parser.error("-2/--reads2 requires -1/--reads1")
+            total_fragments = args.total_fragments
+            if args.total_reads is not None:
+                total_fragments = fragments_from_reads(
+                    args.total_reads, paired=args.reads2 is not None)
             refdb = resolve_refdb(args.database, mode="profile")
             cascade_enabled = not args.no_cascade
             if cascade_enabled and refdb.hmm is None:
@@ -92,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
                 threads=args.threads,
                 keep_aln=args.keep_aln,
                 tmpdir=args.tmpdir,
-                total_reads=args.total_reads,
+                total_fragments=total_fragments,
                 hmm_db=str(refdb.hmm) if cascade_enabled else None,
                 cascade_config=str(refdb.cascade_config) if cascade_enabled else None,
                 exclude_families=str(refdb.exclude_families) if refdb.exclude_families else None,

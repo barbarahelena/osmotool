@@ -43,6 +43,15 @@ class TestWriteGeneCounts:
         assert lines[0].startswith("# total_reads\t6")
         assert lines[1].startswith("# filtered_reads\t6")
 
+    def test_profile_fragment_header_rows(self, tmp_path: Path, sample_counts, sample_rpm):
+        out = write_gene_counts(
+            str(tmp_path / "sample"), sample_counts, sample_rpm,
+            total_reads=6, filtered_reads=4.5, normalisation="rpm",
+            total_reads_label="total_fragments", filtered_reads_label="filtered_fragments",
+        )
+        lines = out.read_text().splitlines()
+        assert lines[:2] == ["# total_fragments\t6", "# filtered_fragments\t4.5"]
+
     def test_column_header(self, tmp_path: Path, sample_counts, sample_rpm):
         prefix = str(tmp_path / "sample")
         out = write_gene_counts(
@@ -262,6 +271,17 @@ class TestBuildAlnStats:
             min_query_cover=0.8, evalue=1e-5,
         )
         assert float(stats["pct_reads_assigned"]) == pytest.approx(50.0)
+
+    def test_fragment_unit_keys(self):
+        """profile counts in fragments; paired-end weighted counts over
+        weighted filtered fragments can reach 100%, not cap at 50%."""
+        stats = self._stats(unit="fragments", total_reads=500, filtered_reads=25.0,
+                            counts={"ectA": 25.0})
+        assert stats["total_fragments"] == 500
+        assert stats["filtered_fragments"] == 25.0
+        assert stats["fragments_assigned"] == "25.0"
+        assert float(stats["pct_fragments_assigned"]) == pytest.approx(100.0)
+        assert "total_reads" not in stats and "pct_reads_assigned" not in stats
 
     def test_zero_filtered_reads_no_division_error(self):
         counts = {"ectA": 0.0}

@@ -28,6 +28,7 @@ def write_gene_counts(
     filtered_reads: int,
     normalisation: str = "rpm",  # "rpm" or "copies_per_kb"
     total_reads_label: str = "total_reads",
+    filtered_reads_label: str = "filtered_reads",
     copies_per_genome: dict[str, float | None] | None = None,
     assembly_stats: AssemblyStats | None = None,
     proteins_with_hits: int | None = None,
@@ -39,16 +40,17 @@ def write_gene_counts(
     Format::
 
         # <total_reads_label>    <N>
-        # filtered_reads <N>
+        # <filtered_reads_label> <N>
         gene    raw_count   <rpm|copies_per_kb>   [copies_per_genome]
         ectA    12.5        3.21                  [0.42]
         ...
 
-    total_reads_label:
-        Header label for the first row. ``profile`` mode passes reads
-        (the default, "total_reads"); ``annotate`` mode passes
-        "total_proteins" since that count is Prodigal-called ORFs, not
-        sequencing reads.
+    total_reads_label, filtered_reads_label:
+        Header labels for the two count rows. ``profile`` mode passes
+        "total_fragments" / "filtered_fragments" (its counts are in
+        fragments: a read pair, or one single-end read); ``annotate`` mode
+        passes "total_proteins" and keeps "filtered_reads", since its count
+        is Prodigal-called ORFs, not sequencing reads.
     copies_per_genome:
         ``profile`` mode with marker genes available (see normalise.py):
         adds a final ``copies_per_genome`` column, ``NA`` where not
@@ -89,7 +91,7 @@ def write_gene_counts(
             fh.write(f"# gc\t{gc}\n")
             fh.write(f"# n_contigs\t{assembly_stats.n_contigs}\n")
             fh.write(f"# contig_n50\t{assembly_stats.contig_n50}\n")
-        fh.write(f"# filtered_reads\t{filtered_reads}\n")
+        fh.write(f"# {filtered_reads_label}\t{filtered_reads}\n")
         if proteins_with_hits is not None:
             fh.write(f"# proteins_with_hits\t{proteins_with_hits}\n")
         src_col = ("\tcatalog_count\tcatalog_ambiguous\ttranslated_count"
@@ -123,8 +125,8 @@ def write_unit_counts(
     out_prefix: str | Path,
     rows: list[dict],
     *,
-    total_reads: int,
-    filtered_reads: int,
+    total_fragments: int | float,
+    filtered_fragments: int | float,
     report_levels: str | Path,
     with_copies: bool = False,
     with_sources: bool = False,
@@ -135,9 +137,9 @@ def write_unit_counts(
 
     Format::
 
-        # total_reads    <N>
-        # filtered_reads <N>
-        # report_levels  <path to osmo_refdb.profile_report_levels.tsv>
+        # total_fragments    <N>
+        # filtered_fragments <N>
+        # report_levels      <path to osmo_refdb.profile_report_levels.tsv>
         unit          report_level  members            status    raw_count  RPM   [copies_per_genome]
         ectA          gene          ectA               reported  12.5       3.21  [0.42]
         opu_permease  group         opuAB,opuBB,opuCB  reported  4.0        1.03  [0.11]
@@ -155,8 +157,8 @@ def write_unit_counts(
     """
     out_path = Path(str(out_prefix) + ".unit_counts.tsv")
     with open(out_path, "w") as fh:
-        fh.write(f"# total_reads\t{total_reads}\n")
-        fh.write(f"# filtered_reads\t{filtered_reads}\n")
+        fh.write(f"# total_fragments\t{total_fragments}\n")
+        fh.write(f"# filtered_fragments\t{filtered_fragments}\n")
         fh.write(f"# report_levels\t{report_levels}\n")
         src_col = "\tcatalog_count\tcatalog_ambiguous\ttranslated_count" if with_sources else ""
         extra_col = "\tcopies_per_genome" if with_copies else ""
@@ -314,6 +316,7 @@ def build_aln_stats(
     min_subject_cover: float = 0.0,
     note_systems: str | None = None,
     extra: dict | None = None,
+    unit: str = "reads",
 ) -> dict:
     """Return a flat dict of summary statistics for :func:`write_aln_stats`.
 
@@ -321,6 +324,10 @@ def build_aln_stats(
     mode leaves this None since it has its own systems.tsv output instead.
     extra: additional key/value rows inserted before the per-family counts
     (profile's marker-normalisation summary).
+    unit: names the count rows (total_<unit>, filtered_<unit>,
+    <unit>_assigned, pct_<unit>_assigned). profile passes "fragments";
+    annotate keeps "reads". total_reads and filtered_reads must be in the
+    same unit as counts, or pct_<unit>_assigned is off by the mate weight.
     """
     total_assigned = sum(counts.values())
     pct_assigned = (
@@ -329,10 +336,10 @@ def build_aln_stats(
     stats = {
         "mode":                mode,
         "db":                  db,
-        "total_reads":         total_reads,
-        "filtered_reads":      filtered_reads,
-        "reads_assigned":      f"{total_assigned:.1f}",
-        "pct_reads_assigned":  f"{pct_assigned:.2f}",
+        f"total_{unit}":       total_reads,
+        f"filtered_{unit}":    filtered_reads,
+        f"{unit}_assigned":    f"{total_assigned:.1f}",
+        f"pct_{unit}_assigned": f"{pct_assigned:.2f}",
         "min_identity":        min_identity,
         "min_query_cover":     min_query_cover,
         "min_subject_cover":   min_subject_cover,

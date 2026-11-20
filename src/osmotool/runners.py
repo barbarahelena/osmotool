@@ -32,7 +32,7 @@ from osmotool.functions import (
     extract_fastq_subset,
     strip_orf_suffix,
     strip_mate_tag,
-    count_reads,
+    count_fragments,
 )
 from osmotool.quantifier import (
     select_best_hits,
@@ -83,7 +83,7 @@ def run_profile(
     threads: int = 4,
     keep_aln: bool = False,
     tmpdir: str | None = None,
-    total_reads: int | None = None,
+    total_fragments: int | float | None = None,
     hmm_db: str | None = None,
     cascade_config: str | None = None,
     exclude_families: str | None = None,
@@ -112,9 +112,17 @@ def run_profile(
     tmpdir:
         Directory for temporary files (merged paired-end FASTQ).
         Defaults to ``$TMPDIR`` (node-local scratch on HPC).
-    total_reads:
-        Pre-computed total read count.  Supply to skip on-the-fly counting
-        (useful when already known from FastQC / MultiQC).
+    total_fragments:
+        Pre-computed number of sequenced fragments: read pairs for
+        paired-end, reads for single-end (see count_fragments). Supply to
+        skip on-the-fly counting (useful when already known from FastQC /
+        MultiQC).
+
+    Counts, RPM and the gene_counts / unit_counts / aln_stats headers are in
+    fragments: each mate of a pair weighs 0.5 and the denominator is pairs,
+    so a paired-end library and the same library run single-end give the
+    same RPM (osmotool <= 0.9 divided paired-end counts by R1 + R2 reads,
+    halving its RPM).
     hmm_db, cascade_config:
         Two-stage DIAMOND+HMM cascade. DIAMOND stays the primary caller for
         every read (needed for speed at millions-of-reads scale, and HMM's
@@ -188,11 +196,13 @@ def run_profile(
     paired = reads1 is not None and reads2 is not None
     resolve_out_prefix(out_prefix)
 
-    # --- count input reads (skip if pre-supplied) ---
-    if total_reads is None:
+    # --- count input fragments (skip if pre-supplied) ---
+    if total_fragments is None:
         log.info("Counting input reads…")
-        total_reads = count_reads(reads1, reads2, singles)
-    log.info("  total reads: %d", total_reads)
+        total_fragments = count_fragments(reads1, reads2, singles)
+    log.info("  total fragments: %s (%s)", total_fragments,
+             "read pairs" if paired else "single-end reads")
+    weight = 0.5 if paired else 1.0
 
     # --- catalog first: settle every read the catalog can (catalog.py) ---
     # t_reads* are what the translated search sees: all reads, or only the
@@ -228,7 +238,9 @@ def run_profile(
     # --- run DIAMOND blastx ---
     aln_file = Path(str(out_prefix) + ".blastx.tsv")
     best_hits: dict[str, dict] = {}
-    filtered_reads = 0
+    # Fragments with any alignment (DIAMOND or catalog call), in the same
+    # unit as counts, so pct_fragments_assigned can reach 100% paired-end too.
+    filtered_fragments = 0.0
     if catalog is None or translated_fallback:
         run_diamond_blastx(
             db,
@@ -246,7 +258,7 @@ def run_profile(
 
         # --- parse alignments & best-hit selection ---
         alignments = list(parse_diamond_output(aln_file, min_subject_cover=min_subject_cover))
-        filtered_reads = len({row["qseqid"] for row in alignments})
+        filtered_fragments = weight * len({row["qseqid"] for row in alignments})
         best_hits = select_best_hits(iter(alignments))
 
         # --- DIAMOND+HMM cascade: second opinion for reads on flagged families ---
@@ -265,13 +277,13 @@ def run_profile(
         counts = {f: translated.get(f, 0.0) + cat.counts.get(f, 0.0) for f in families}
         sources = {f: (cat.counts.get(f, 0.0), cat.ambiguous.get(f, 0.0), translated.get(f, 0.0))
                    for f in families}
-        filtered_reads += cat.n_called
+        filtered_fragments += weight * cat.n_called
     if exclude_families is not None:
         excluded = load_excluded_families(exclude_families)
         counts = {fam: cnt for fam, cnt in counts.items() if fam not in excluded}
         if sources is not None:
             sources = {f: v for f, v in sources.items() if f not in excluded}
-    rpm = compute_rpm(counts, total_reads)
+    rpm = compute_rpm(counts, total_fragments)
 
     # --- copies per genome, via universal single-copy markers ---
     copies, marker_stats = None, None
@@ -290,9 +302,11 @@ def run_profile(
     # --- write outputs ---
     counts_path = write_gene_counts(
         out_prefix, counts, rpm,
-        total_reads=total_reads,
-        filtered_reads=filtered_reads,
+        total_reads=total_fragments,
+        filtered_reads=filtered_fragments,
         normalisation="rpm",
+        total_reads_label="total_fragments",
+        filtered_reads_label="filtered_fragments",
         copies_per_genome=copies,
         count_sources=sources,
     )
@@ -302,7 +316,7 @@ def run_profile(
                                            sources=sources)
         write_unit_counts(
             out_prefix, unit_rows,
-            total_reads=total_reads, filtered_reads=filtered_reads,
+            total_fragments=total_fragments, filtered_fragments=filtered_fragments,
             report_levels=report_levels, with_copies=copies is not None,
             with_sources=sources is not None,
         )
@@ -313,8 +327,9 @@ def run_profile(
         }
     stats = build_aln_stats(
         mode="profile",
-        total_reads=total_reads,
-        filtered_reads=filtered_reads,
+        unit="fragments",
+        total_reads=total_fragments,
+        filtered_reads=filtered_fragments,
         counts=counts,
         db=str(db),
         min_identity=min_identity,
@@ -800,7 +815,7 @@ def _finish_annotate_method(
     gracefully."""
     # Proteins with at least one hit that passed filtering, counted before
     # best-hit selection and decoy exclusion. Written under its legacy
-    # "filtered_reads" name (shared with profile) and as proteins_with_hits.
+    # "filtered_reads" name and as proteins_with_hits.
     filtered_reads = len({row["qseqid"] for row in alignments})
     best_hits = select_best_hits(iter(alignments))
 

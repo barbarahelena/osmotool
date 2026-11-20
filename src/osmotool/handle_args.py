@@ -108,14 +108,6 @@ def _add_hpc_args(p: argparse.ArgumentParser) -> None:
             "Set to fast node-local scratch to avoid writing to a shared filesystem."
         ),
     )
-    hpc.add_argument(
-        "--total_reads", type=int, default=None, metavar="N",
-        help=(
-            "Total read count (skip on-the-fly counting). "
-            "Provide when already known (e.g. from FastQC/MultiQC) "
-            "to avoid iterating large files."
-        ),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +147,19 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
     reads.add_argument(
         "-2", "--reads2", metavar="R2.FASTQ[.GZ]", default=None,
         help="Reverse reads (R2).  Only valid with -1/--reads1.",
+    )
+    total = reads.add_mutually_exclusive_group()
+    total.add_argument(
+        "--total_fragments", type=int, default=None, metavar="N",
+        help="Number of sequenced fragments, the RPM denominator: read PAIRS "
+             "for paired-end (the read count of R1 alone), reads for "
+             "single-end. Skips counting the input; provide when already "
+             "known (e.g. from FastQC/MultiQC) to avoid iterating large files.",
+    )
+    total.add_argument(
+        "--total_reads", type=int, default=None, metavar="N",
+        help="Like --total_fragments, but the reads summed over ALL input "
+             "files (R1 + R2 for paired-end); halved for paired-end input.",
     )
     reads.add_argument(
         "--min_seqlen", type=int, default=20, metavar="AA",

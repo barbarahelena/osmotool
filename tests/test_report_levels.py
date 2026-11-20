@@ -116,14 +116,14 @@ class TestWriteUnitCounts:
     def _write(self, tmp_path: Path, copies=None) -> list[str]:
         counts = {"ectA": 2.0, "opuAB": 1.5, "opuBB": 0.5, "opuAC": 3.0}
         rows = aggregate_report_units(UNITS, counts, {k: v * 10 for k, v in counts.items()}, copies)
-        path = write_unit_counts(tmp_path / "s", rows, total_reads=100, filtered_reads=7,
+        path = write_unit_counts(tmp_path / "s", rows, total_fragments=100, filtered_fragments=7,
                                  report_levels="rel/levels.tsv", with_copies=copies is not None)
         assert path == tmp_path / "s.unit_counts.tsv"
         return path.read_text().splitlines()
 
     def test_format(self, tmp_path: Path):
         lines = self._write(tmp_path)
-        assert lines[:3] == ["# total_reads\t100", "# filtered_reads\t7",
+        assert lines[:3] == ["# total_fragments\t100", "# filtered_fragments\t7",
                              "# report_levels\trel/levels.tsv"]
         assert lines[3] == "unit\treport_level\tmembers\tstatus\traw_count\tRPM"
         assert lines[4] == "ectA\tgene\tectA\treported\t2.0\t20"
