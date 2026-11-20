@@ -101,6 +101,19 @@ INDEX_KINDS = ("all", "hits", "neighbours", "none")
 NEIGHBOUR_WINDOW, NEIGHBOUR_STEP = 150, 50
 NEIGHBOUR_MIN_IDENTITY, NEIGHBOUR_MIN_ALIGNED = 0.90, 45
 
+# Partial genes: a catalog gene cut at a contig end covers only part of a model
+# and can only reach part of a full-length score, however close it is (GMGC
+# holds many). Its gathering cutoff is scaled by the share of the model it
+# covers, down to MIN_MODEL_COVER; below that the full cutoff applies. Only a
+# gene that is cut where the model is missing counts: each end of the model
+# its domains leave out must fall within GENE_END_SLACK residues of an end of
+# the gene. A complete protein that shares one domain with a multi-domain
+# model (another ABC ATPase against opuBA) leaves the model out where it goes
+# on, and is judged at the full cutoff. min_model_cover=1.0 turns it off.
+MIN_MODEL_COVER = 1.0     # off by default: not yet calibrated per family
+MODEL_END_SLACK = 10    # model positions short of an end that still count as reaching it
+GENE_END_SLACK = 10     # gene residues short of an end that still count as the gene's end
+
 ANNOTATED, HOMOLOG, DECOY = "annotated", "homolog", "decoy"
 BACKGROUND = "background"   # indexed gene without any HMM hit
 
@@ -168,8 +181,9 @@ def sha256_of(path: str | Path) -> str:
 # ---------------------------------------------------------------------------
 
 def parse_domtblout(path: str | Path) -> dict[str, dict[str, dict]]:
-    """{gene: {model: {"score", "evalue", "domains": [(env_from, env_to, score)]}}}
-    from hmmsearch --domtblout (target = gene protein, query = model)."""
+    """{gene: {model: {"score", "evalue", "qlen", "domains": [(env_from, env_to, score)],
+    "hmm_spans": [(hmm_from, hmm_to)]}}} from hmmsearch --domtblout (target = gene
+    protein, query = model; qlen is the model's length, tlen the protein's)."""
     hits: dict[str, dict[str, dict]] = {}
     with open(path) as fh:
         for line in fh:
@@ -178,13 +192,60 @@ def parse_domtblout(path: str | Path) -> dict[str, dict[str, dict]]:
             f = line.split()
             gene, model = f[0], f[3]
             h = hits.setdefault(gene, {}).setdefault(
-                model, {"score": float(f[7]), "evalue": float(f[6]), "domains": []})
+                model, {"score": float(f[7]), "evalue": float(f[6]), "qlen": int(f[5]),
+                        "tlen": int(f[2]), "domains": [], "hmm_spans": []})
             h["domains"].append((int(f[19]), int(f[20]), float(f[13])))
+            h["hmm_spans"].append((int(f[15]), int(f[16])))
     return hits
 
 
+def model_cover(hit: dict) -> float:
+    """Share of the model's positions a gene's domains cover (their union over
+    hmm_from-hmm_to, divided by the model length), 0-1."""
+    spans = sorted(hit.get("hmm_spans") or [])
+    qlen = hit.get("qlen") or 0
+    if not spans or qlen <= 0:
+        return 1.0
+    covered, (cur_a, cur_b) = 0, spans[0]
+    for a, b in spans[1:]:
+        if a > cur_b + 1:
+            covered += cur_b - cur_a + 1
+            cur_a, cur_b = a, b
+        else:
+            cur_b = max(cur_b, b)
+    covered += cur_b - cur_a + 1
+    return min(1.0, covered / qlen)
+
+
+def cut_where_model_is_missing(hit: dict) -> bool:
+    """True when the gene ends where its domains leave the model out: a missing
+    model start (hmm_from past MODEL_END_SLACK) needs the alignment to start at
+    the gene's start, a missing model end at the gene's end (within
+    GENE_END_SLACK). A gene covering the whole model is trivially True; one
+    without model or gene coordinates False."""
+    spans, doms, qlen, tlen = hit.get("hmm_spans"), hit.get("domains"), hit.get("qlen"), hit.get("tlen")
+    if not spans or not doms or not qlen or not tlen:
+        return False
+    hmm_from, hmm_to = min(a for a, _ in spans), max(b for _, b in spans)
+    env_from, env_to = min(d[0] for d in doms), max(d[1] for d in doms)
+    if hmm_from > 1 + MODEL_END_SLACK and env_from > 1 + GENE_END_SLACK:
+        return False
+    if hmm_to < qlen - MODEL_END_SLACK and env_to < tlen - GENE_END_SLACK:
+        return False
+    return True
+
+
+def gene_cutoff(ga1: float, cover: float, min_cover: float) -> float:
+    """The sequence-score cutoff for a gene covering `cover` of the model: GA1
+    scaled by the cover, for a cover of at least min_cover (MIN_MODEL_COVER);
+    GA1 itself at min_cover >= 1, at full cover, or below min_cover."""
+    if min_cover >= 1.0 or cover >= 1.0 or cover < min_cover:
+        return ga1
+    return ga1 * cover
+
+
 def assign_gene(hits: dict[str, dict], ga: dict[str, tuple[float, float]],
-                decoys: set[str]) -> dict:
+                decoys: set[str], *, min_cover: float = 1.0) -> dict:
     """The full-length decision for one gene, as annotate --method hmm makes
     it: keep the models whose *sequence* score reaches GA1, then the best one
     by score (ties: lower E-value, then name, as quantifier.select_best_hits).
@@ -196,16 +257,27 @@ def assign_gene(hits: dict[str, dict], ga: dict[str, tuple[float, float]],
     (below GA). Envelopes are the span of a model's domains (amino acids;
     nucleotide coordinates are derived later): env_aa for the winner,
     others for every other non-decoy model that also passes, which on a
-    fused gene (e.g. mrpA-mrpB) mark the other family's region."""
+    fused gene (e.g. mrpA-mrpB) mark the other family's region.
+
+    min_cover < 1 (build_catalog's min_model_cover): a gene cut where it
+    leaves the model out (cut_where_model_is_missing) passes at GA1 scaled by
+    the share of the model it covers (gene_cutoff), so a partial gene is
+    judged by its score per model position, as a complete one is; below
+    min_cover, or for a gene that goes on past the model's missing part, the
+    full GA1 applies. The winner is still the
+    best raw score: every model is scored on the same gene."""
     passing = []
     for model, h in hits.items():
-        if model in ga and h["score"] >= ga[model][0] and h["domains"]:
+        cover = model_cover(h) if cut_where_model_is_missing(h) else 1.0
+        if model in ga and h["domains"] and \
+                h["score"] >= gene_cutoff(ga[model][0], cover, min_cover):
             passing.append((-h["score"], h["evalue"], model))
     best_any = min(hits.items(), key=lambda kv: (-kv[1]["score"], kv[1]["evalue"], kv[0]))
     if not passing:
         return {"label": "", "status": HOMOLOG, "score": "",
                 "best_model": best_any[0], "best_score": best_any[1]["score"],
-                "env_aa": None, "others": []}
+                "model_cover": model_cover(best_any[1]),
+                "cut": cut_where_model_is_missing(best_any[1]), "env_aa": None, "others": []}
 
     def span(model):
         doms = hits[model]["domains"]
@@ -214,7 +286,9 @@ def assign_gene(hits: dict[str, dict], ga: dict[str, tuple[float, float]],
     others = [(m, span(m)) for _, _, m in sorted(passing) if m != model and m not in decoys]
     return {"label": model, "status": DECOY if model in decoys else ANNOTATED,
             "score": hits[model]["score"], "best_model": best_any[0],
-            "best_score": best_any[1]["score"], "env_aa": span(model), "others": others}
+            "best_score": best_any[1]["score"], "model_cover": model_cover(hits[model]),
+            "cut": cut_where_model_is_missing(hits[model]),
+            "env_aa": span(model), "others": others}
 
 
 def build_catalog(
@@ -231,6 +305,7 @@ def build_catalog(
     aligner: str = DEFAULT_ALIGNER,
     aligner_bin: str | None = None,
     index: str = "all",
+    min_model_cover: float = MIN_MODEL_COVER,
 ) -> Path:
     """
     Annotate a nucleotide gene catalog once with the release's HMMs and write
@@ -255,7 +330,13 @@ def build_catalog(
               that are close to one (find_neighbours), small enough to ship;
               "none" writes the annotation only, to be used with a full index
               built separately by index_catalog (profile --catalog_index).
+    min_model_cover: a gene covering this share of a model or more passes at
+              the gathering cutoff scaled by its cover (assign_gene), so genes
+              cut at contig ends are judged like complete ones; 1.0 applies
+              the full cutoff to every gene.
     """
+    if not 0.0 < min_model_cover <= 1.0:
+        raise ValueError(f"min_model_cover must be in (0, 1], not {min_model_cover}")
     if index not in INDEX_KINDS:
         raise ValueError(f"index must be one of {', '.join(INDEX_KINDS)}, not {index!r}")
     if aligner not in ALIGNERS:
@@ -299,7 +380,8 @@ def build_catalog(
     if subprocess.run(cmd, stdout=subprocess.DEVNULL).returncode != 0:
         raise RuntimeError("hmmsearch failed on the catalog")
     hits = parse_domtblout(domtbl)
-    decisions = {g: assign_gene(h, ga, decoy_models) for g, h in hits.items()}
+    decisions = {g: assign_gene(h, ga, decoy_models, min_cover=min_model_cover)
+                 for g, h in hits.items()}
 
     # --- lengths of the hit genes (and, for index="hits"/"neighbours", their sequences) ---
     fna = out_dir / CATALOG_FNA          # index prefix; a FASTA only for "hits"/"neighbours"
@@ -322,7 +404,7 @@ def build_catalog(
     by_label: dict[str, int] = {}
     with open(out_dir / CATALOG_ANNOTATION, "w") as out:
         out.write("gene\tlabel\tstatus\tgene_nt\tenv_nt_start\tenv_nt_end\tscore\t"
-                  "best_model\tbest_score\tother_envelopes\n")
+                  "best_model\tbest_score\tother_envelopes\tmodel_cover\tcut_at_gene_end\n")
         for gid in sorted(decisions):
             d = decisions[gid]
             if d["env_aa"] is None:
@@ -334,7 +416,8 @@ def build_catalog(
             others = ",".join(f"{m}:{(a - 1) * 3 + 1}-{min(b * 3, gene_len[gid])}"
                               for m, (a, b) in d.get("others", []))
             out.write(f"{gid}\t{d['label']}\t{d['status']}\t{gene_len[gid]}\t{start}\t{end}\t"
-                      f"{d['score']}\t{d['best_model']}\t{d['best_score']}\t{others}\n")
+                      f"{d['score']}\t{d['best_model']}\t{d['best_score']}\t{others}\t"
+                      f"{d['model_cover']:.3f}\t{'yes' if d['cut'] else 'no'}\n")
 
     # --- the hit genes' neighbours, appended to the FASTA of the hit genes ---
     neighbours: dict[str, float] = {}
@@ -380,6 +463,10 @@ def build_catalog(
            if index == "neighbours" else {}),
         "min_protein_length": min_protein_length,
         "hmmsearch_evalue": evalue,
+        "partial_gene_rule": {"ga_scaled_by_model_cover": min_model_cover < 1.0,
+                              "min_model_cover": min_model_cover,
+                              "model_end_slack": MODEL_END_SLACK,
+                              "gene_end_slack": GENE_END_SLACK},
         "aligner": aligner,
         "aligner_bin": aligner_bin,
         "genes_per_label": dict(sorted(by_label.items())),
