@@ -29,7 +29,13 @@ RELEASES: dict[str, str] = {
     "v8": "21691253",
     "v9": "24154957",
 }
+# v10 joins RELEASES, and becomes LATEST_RELEASE, once its Zenodo record exists.
 LATEST_RELEASE = "v9"
+
+# Releases that ship no gene catalog. `profile` needs one, so these serve
+# `annotate` (and reproducing older results) only. Kept downloadable rather
+# than dropped: annotate's results on them stay valid.
+ANNOTATE_ONLY_RELEASES: frozenset[str] = frozenset({"v5", "v7", "v8", "v9"})
 
 
 def _resolve_release(release: str) -> str:
@@ -201,6 +207,9 @@ def download_refdb(
     """
     release = _resolve_release(release)
     record_id = RELEASES[release]
+    if release in ANNOTATE_ONLY_RELEASES:
+        log.warning("osmo_refdb %s ships no gene catalog: use it with `annotate`. "
+                    "`profile` needs v10 or later.", release)
 
     location = Path(location)
     location.mkdir(parents=True, exist_ok=True)

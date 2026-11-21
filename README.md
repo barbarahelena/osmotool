@@ -9,7 +9,7 @@ Screen osmoadaptation genes in metagenomic datasets using [DIAMOND](https://gith
 | Subcommand | Input | Method |
 |---|---|---|
 | `download-db` | — | Downloads and unpacks an [`osmo_refdb`](https://github.com/barbarahelena/osmo_refdb) release from Zenodo |
-| `profile` | FASTQ reads (paired or single-end) | `diamond blastx` (6-frame translation) with a DIAMOND+HMM cascade on by default (`--no_cascade` to disable) |
+| `profile` | FASTQ reads (paired or single-end) | Reads assigned against the release's annotated gene catalog (bwa-mem3); the rest by translated search (`diamond blastx` + a DIAMOND+HMM cascade). Needs osmo_refdb v10+ |
 | `annotate` | Assembly FASTA (or pre-called proteins) | Prodigal → `hmmsearch --cut_ga` (default), or `diamond blastp` (`--method diamond`) |
 
 Both modes produce per-gene raw counts and a normalised value: `profile`
@@ -56,13 +56,22 @@ and `:X.Y.Z` are both updated on each release.
 
 `osmotool` takes a single `DATABASE` argument: the path to an unpacked
 [`osmo_refdb`](https://github.com/barbarahelena/osmo_refdb) release
-directory (e.g. `v9/`) — download and unpack it with:
+directory (e.g. `v10/`) — download and unpack it with:
 
 ```bash
-osmotool download-db --release v9 --location /path/to/refdb
-# -> downloads + unpacks into /path/to/refdb/v9/
-osmotool profile /path/to/refdb/v9 ...
+osmotool download-db --release v10 --location /path/to/refdb
+# -> downloads + unpacks into /path/to/refdb/v10/
+osmotool profile /path/to/refdb/v10 ...
 ```
+
+**`profile` needs v10 or later.** v10 is the first release that ships a gene
+catalog, and `profile` assigns reads against it first; on an older release it
+stops with an error rather than quietly running translated search alone.
+v5–v9 are kept downloadable as **annotate-only** releases: `annotate` results
+on them stay valid, and `download-db` warns when you fetch one.
+
+> v10's Zenodo record is not up yet, so `download-db` does not list it and
+> `latest` still means v9. Until then, unpack v10 by hand and pass its path.
 
 `--release` defaults to `latest` (currently `v9`); `--location` defaults to
 the current directory. Already-extracted releases are left alone unless
@@ -70,7 +79,7 @@ the current directory. Already-extracted releases are left alone unless
 successful extraction unless `--keep_archive` is passed. The download is
 checksum-verified against Zenodo's reported md5 before extraction.
 
-**v9** (latest) — DOI: [10.5281/zenodo.24154957](https://doi.org/10.5281/zenodo.24154957).
+**v9** (latest on Zenodo; annotate-only) — DOI: [10.5281/zenodo.24154957](https://doi.org/10.5281/zenodo.24154957).
 Adds `teaA` (ectoine/hydroxyectoine TRAP binding protein, TeaA/UehA clade)
 and ships a `markers/` set of universal single-copy genes, which `profile`
 uses for copies-per-genome normalisation. Every family's benchmark negatives
@@ -92,7 +101,7 @@ mislabeling for 8 families (murB, mrpB, mrpE, mrpF, mrpG, gshB, cspA,
 mscS) and replaces 6 families' Pfam default HMM cutoffs with locally
 calibrated ones, improving short-fragment-read sensitivity (e.g. gshB F1
 0.47→0.88, mrpE F1 0.20→0.72; panel-wide DIAMOND F1 0.827→0.832, HMM F1
-0.693→0.722). No gene/family panel changes. Still downloadable
+0.693→0.722). No gene/family panel changes. Annotate-only
 (`--release v8`).
 
 **v7** — DOI: [10.5281/zenodo.21600046](https://doi.org/10.5281/zenodo.21600046).
@@ -100,19 +109,19 @@ Adds the Firmicutes compatible-solute transporters (opuA/opuB/opuC), the
 Mrp/Mnh Na⁺/H⁺ antiporter complex, gut-validated subsystems (bet/gsh/cspA),
 and Kdp backup/disambiguation genes (trk/ktr) on top of v5's original panel
 — see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only)
-above for what `annotate` mode does with the new multi-subunit ones. Still
-downloadable (`--release v7`).
+above for what `annotate` mode does with the new multi-subunit ones.
+Annotate-only (`--release v7`).
 
 **v5** — DOI: [10.5281/zenodo.21420253](https://doi.org/10.5281/zenodo.21420253).
-Still downloadable (`--release v5`) for reproducing results generated
-against the original panel.
+Annotate-only (`--release v5`), for reproducing results generated against
+the original panel.
 
 Or download manually:
 
 ```bash
 curl -LO https://zenodo.org/records/24154957/files/osmo_refdb_v9.tar.gz
 tar -xzf osmo_refdb_v9.tar.gz    # produces an osmo_refdb_v9/ directory
-osmotool profile osmo_refdb_v9 ...
+osmotool annotate osmo_refdb_v9 ...   # v9 is annotate-only
 ```
 
 Cite the DOI of whichever release you used (alongside `osmotool` itself) in
@@ -123,6 +132,7 @@ filename — no need to point at each file separately:
 
 | File | Used by |
 |---|---|
+| `catalogs/<name>/` | `profile` (the gene catalog; v10+, required) |
 | `osmo_refdb.dmnd` | both (DIAMOND database) |
 | `hmms/osmo_refdb.hmm` (+ `.h3*` indices) | `annotate`'s default `--method hmm`/`both`; `profile`'s cascade (on by default) |
 | `osmo_refdb.profile_cascade.tsv` | `profile`'s cascade (on by default) |
@@ -130,7 +140,7 @@ filename — no need to point at each file separately:
 | `osmo_refdb.profile_excluded_families.txt` | `profile` (auto-applied if present) |
 | `osmo_refdb.annotate_excluded_families.txt` | `annotate` (auto-applied if present) |
 
-Only `osmo_refdb.dmnd` is required. Everything else is optional and used
+`osmo_refdb.dmnd` is required, and `profile` also needs `catalogs/`. Everything else is optional and used
 automatically when present, including the `profile` DIAMOND+HMM cascade
 — it's on by default whenever `hmms/osmo_refdb.hmm` and
 `osmo_refdb.profile_cascade.tsv` are both present in `DATABASE`, since
@@ -144,16 +154,18 @@ pass `--no_cascade` to opt out and run DIAMOND-only intentionally.
 
 ### Profile reads (FASTQ)
 
-This runs with the DIAMOND+HMM cascade on by default (a second HMM
-opinion on families with demonstrated DIAMOND precision problems —
-requires `orfm` + `hmmsearch` on PATH; see [Reference database](#reference-database)
-above). Scope-excluded families are hidden from the report automatically
-whenever `osmo_refdb.profile_excluded_families.txt` is present in
-`DATABASE`:
+Reads are assigned against the release's gene catalog first; whatever the
+catalog cannot settle goes to translated search, which runs the DIAMOND+HMM
+cascade by default (a second HMM opinion on families with demonstrated
+DIAMOND precision problems). Needs `bwa-mem3`, `diamond`, `orfm` and
+`hmmsearch` on PATH; see [Gene catalog](#gene-catalog-profile-mode) and
+[Reference database](#reference-database). Scope-excluded families are
+hidden from the report automatically whenever
+`osmo_refdb.profile_excluded_families.txt` is present in `DATABASE`:
 
 ```bash
 osmotool profile \
-  /path/to/osmo_refdb/releases/v9 \
+  /path/to/osmo_refdb/releases/v10 \
   -1 sample_R1.fastq.gz \
   -2 sample_R2.fastq.gz \
   --out_prefix results/sample \
@@ -167,17 +179,17 @@ Single-end reads:
 
 ```bash
 osmotool profile \
-  /path/to/osmo_refdb/releases/v9 \
+  /path/to/osmo_refdb/releases/v10 \
   --singles sample.fastq.gz \
   --out_prefix results/sample \
   --threads 8
 ```
 
-DIAMOND-only, e.g. when `orfm`/`hmmsearch` aren't installed:
+Translated search without the cascade, e.g. when `orfm`/`hmmsearch` aren't installed:
 
 ```bash
 osmotool profile \
-  /path/to/osmo_refdb/releases/v9 \
+  /path/to/osmo_refdb/releases/v10 \
   -1 sample_R1.fastq.gz -2 sample_R2.fastq.gz \
   --out_prefix results/sample \
   --no_cascade \
@@ -239,8 +251,8 @@ osmotool predict-nacl /path/to/osmo_refdb/releases/v10 \
 | File | Description |
 |---|---|
 | `<prefix>.gene_counts.tsv` | Per-gene raw counts and normalised value (`rpm` or `copies_per_kb`, depending on mode) |
-| `<prefix>.aln_stats.tsv` | Summary statistics |
-| `<prefix>.catalog_hits.tsv` | `profile --catalog --keep_aln` only — every catalog-settled read: gene, call/drop/ambiguous, label, identity, aligned bp, number of valid placements |
+| `<prefix>.aln_stats.tsv` | Summary statistics, one `metric value` row each (see [`aln_stats.tsv` format](#aln_statstsv-format-profile-mode) below) |
+| `<prefix>.catalog_hits.tsv` | `profile --keep_aln` only — every catalog-settled read: gene, call/drop/ambiguous, label, identity, aligned bp, number of valid placements |
 | `<prefix>.unit_counts.tsv` | `profile` only, when DATABASE ships `osmo_refdb.profile_report_levels.tsv` (osmo_refdb v10+) — the counts per reporting unit, excluded units included (see [Report units](#report-units-profile-mode) below) |
 | `<prefix>.markers.tsv` | `profile` only, when DATABASE ships `markers/` — per-marker evidence behind `copies_per_genome` (see [Copies per genome](#copies-per-genome-profile-mode) below) |
 | `<prefix>.systems.tsv` | `annotate` only — multi-subunit system calls (see [Multi-subunit systems](#multi-subunit-systems-annotate-mode-only) below) |
@@ -255,10 +267,13 @@ osmotool predict-nacl /path/to/osmo_refdb/releases/v10 \
 ```
 # total_fragments    1000000
 # filtered_fragments 42753.5
-gene    raw_count   rpm
-UniRef90_A0A000   12.5    3.21
-UniRef90_A0A001    4.0    1.05
+gene    raw_count   RPM     catalog_count   catalog_ambiguous   translated_count
+betA    12.5        12.5    10.0            0.50                2.5
+ectA     4.0         4.0     0.0            0.00                4.0
 ```
+
+With `--translated_only` the three source columns are left out. A
+`copies_per_genome` column follows them when `DATABASE` ships `markers/`.
 
 **RPM** = `(raw_count × 10⁶) / total_fragments` — reads are not assembled, so no gene
 length is available and no per-length correction is applied. This is a real
@@ -271,7 +286,7 @@ sample happened to be sequenced to.
 library and the same library run single-end give the same RPM.
 `filtered_fragments` (fragments with any alignment) is weighted the same way.
 
-> **Changed after v0.9.0:** earlier versions divided paired-end counts by the
+> **Changed in v0.9.2:** earlier versions divided paired-end counts by the
 > reads in R1 + R2, so paired-end RPM was half of what single-end gave, and
 > `pct_reads_assigned` could not exceed 50%. Paired-end RPM is now 2× its old
 > value; single-end is unchanged. The header lines and `aln_stats.tsv` keys
@@ -280,6 +295,43 @@ library and the same library run single-end give the same RPM.
 > `pct_reads_assigned` → `pct_fragments_assigned`) so old and new outputs
 > can't be mixed by accident. `copies_per_genome` is a ratio to marker genes
 > counted the same way and is unaffected.
+
+### `aln_stats.tsv` format (`profile` mode)
+
+Two columns, `metric` and `value`, one row per metric. Counts in fragments
+(see above) except where a row says reads.
+
+| Metric | Meaning |
+|---|---|
+| `mode`, `db` | `profile`, and the DIAMOND database path |
+| `total_fragments` | Sequenced fragments (read pairs, or single-end reads): the RPM denominator |
+| `filtered_fragments` | Fragments with a catalog call or any DIAMOND alignment |
+| `fragments_assigned`, `pct_fragments_assigned` | Fragments counted for a reported family, and their share of `filtered_fragments` |
+| `min_identity`, `min_query_cover`, `min_subject_cover`, `evalue` | DIAMOND filters used |
+| `note_systems` | Reminder that multi-subunit systems are not checked for co-location from reads |
+| `genome_coverage_rpk`, `markers_used`, ... | Marker normalisation summary, when `DATABASE` ships `markers/` (see [Copies per genome](#copies-per-genome-profile-mode)) |
+| `report_levels`, `units_reported`, `units_excluded` | Report-levels file and its outcome, when shipped |
+| `catalog` | Catalog name (`gmgc_gut`), or `none (--translated_only)` |
+| `catalog_release` | osmo_refdb release whose HMMs annotated it |
+| `catalog_hmm_sha256` | Checksum of those HMMs, as recorded in `catalog.json` and checked against `DATABASE` |
+| `catalog_dir`, `catalog_aligner`, `catalog_index` | Where the catalog was read from, the mapping executable, and the index kind (`all`/`hits`/`neighbours`) |
+| `catalog_reads_called` | **Reads** (each mate counts 1) the catalog settled as one family |
+| `catalog_reads_ambiguous` | Reads with valid placements on different families: settled, split over them in `catalog_ambiguous` |
+| `catalog_reads_dropped`, `catalog_dropped_by_reason` | Reads settled on a gene that is not counted (background, homolog below the cutoff, decoy), by reason |
+| `catalog_reads_fallback` | Reads the catalog could not settle; these went on to translated search |
+| `catalog_settled_fraction` | Share of panel-assigned fragments the catalog settled: Σ(`catalog_count` + `catalog_ambiguous`) / Σ(those + `translated_count`) over the reported families. `NA` when nothing was assigned |
+| `translated_fallback` | `yes`, or `no` with `--catalog_only` |
+| `count_<family>` | `raw_count` per family |
+
+`catalog_settled_fraction` is counted over panel assignments, not over all
+reads: a release's index holds only panel genes and their close neighbours,
+so most reads of any sample map nowhere in it, and `catalog_reads_fallback`
+is large even when the catalog fits. When the fraction is below 0.5,
+`profile` warns on stderr, naming the catalog. A low fraction usually means
+the sample comes from a habitat the catalog does not cover (marine or soil
+reads against `gmgc_gut`): the counts are still valid, but they are mostly
+translated-search counts. The 0.5 threshold is a starting point, not a
+calibrated value.
 
 ### Copies per genome (`profile` mode)
 
@@ -405,40 +457,51 @@ opuAC         none          opuAC              excluded  NA         NA
   as `mrpA_mrpB_fused`) gets `status not_in_manifest`, so no read disappears
   silently.
 
+The levels were decided on translated-search calibration reads, so they
+describe step 2 of `profile`; catalog-settled reads are full-length calls.
+
 Every unit in the manifest gets a row, zeros included. Read results from this
 table; `gene_counts.tsv` is unchanged and still lists every family on its own,
 including families whose gene-level count is not reliable. The manifest's
 other columns hold the calibration numbers behind each choice.
 
-### Gene catalog (`profile --catalog`)
+### Gene catalog (`profile` mode)
 
 Translated search on 150 bp reads has to tell close paralogs apart from a
-fragment, which is where it fails (see the report levels above). With a gene
-catalog, that decision is made once, at full length, and reads are then
-assigned by near-exact nucleotide matching, the approach of catalog-based
-profilers such as Cayman:
+fragment, which is where it fails (see the report levels above). `profile`
+therefore works in two steps:
 
-A release can ship catalogs under `catalogs/<name>/`: index, annotation
-and metadata built with that release's HMMs, versioned with it as one unit
-(osmo_refdb's `RELEASE_CATALOG`). `profile` uses it by default when the
-release ships one; with several, pick one by name; `--no_catalog` is
-translated search only:
+1. **Catalog.** Reads are assigned against the gene catalog the release
+   ships, annotated once at full length with the release's HMMs. A read that
+   matches a catalog gene near-exactly takes that gene's family, the approach
+   of catalog-based profilers such as Cayman.
+2. **Translated search.** Whatever the catalog cannot settle falls through
+   to DIAMOND and the cascade, as described above.
+
+A release ships its catalogs under `catalogs/<name>/` (index, annotation
+and metadata built with that release's HMMs, versioned with it as one unit;
+osmo_refdb's `RELEASE_CATALOG`). v10 ships `gmgc_gut` alone, so nothing has
+to be passed. Once a release ships catalogs for several habitats, choose one
+with `--habitat NAME`:
 
 ```bash
-# per sample: catalog first, translated search for the rest
 osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz -o sample
-osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog gmgc_gut -o sample
-osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --no_catalog -o sample
+osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --habitat gmgc_gut -o sample
 ```
 
 For a catalog of your own, build it once per release (translate, hmmsearch
-with the release's HMMs under their gathering cutoffs, index the whole
-catalog with bwa-mem3) and pass its directory:
+with the release's HMMs under their gathering cutoffs, index the catalog
+with bwa-mem3) and pass its directory with `--catalog_dir` (left out of
+`--help`; a shipped catalog is versioned with its release, a local one is
+yours to keep in step):
 
 ```bash
 osmotool build-catalog releases/v10 --genes my_genes.fna.gz -o my_catalog_v10 -t 32
-osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog my_catalog_v10 -o sample
+osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog_dir my_catalog_v10 -o sample
 ```
+
+For benchmarking, `--translated_only` skips step 1 and assigns every read by
+translated search; it also runs on releases without a catalog.
 
 - The whole catalog is indexed (`--index all`, the default), so reads map
   competitively against every gene, as in Cayman: a read from an unrelated
@@ -454,7 +517,7 @@ osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog my_catalog_v10 -
   the whole-catalog index is 19x (osmo_refdb `studies/catalog_index`). This
   is the index osmo_refdb releases ship.
 - A read aligned at >= 97% nucleotide identity over >= 45 bp (Cayman's
-  defaults; `--catalog_min_identity`, `--catalog_min_aligned`) is settled by
+  defaults; tuning options `--catalog_min_identity`, `--catalog_min_aligned`) is settled by
   its gene: counted for the gene's family wherever it lies on the gene (on a
   fused gene where two families pass, for the family whose region holds the
   read), or dropped if the gene has no hit (background), is a homolog below
@@ -465,8 +528,8 @@ osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog my_catalog_v10 -
   that also pass the thresholds) on different families is ambiguous: it is
   settled, split equally over those families in `catalog_ambiguous`, and kept
   out of `raw_count`.
-- Every other read goes on to DIAMOND, the cascade and the report levels, as
-  without a catalog (`--catalog_only` skips that step).
+- Every other read goes on to DIAMOND, the cascade and the report levels
+  (`--catalog_only` skips that step).
 - `gene_counts.tsv` and `unit_counts.tsv` gain `catalog_count`,
   `catalog_ambiguous` and `translated_count`; `raw_count` is
   `catalog_count + translated_count`. A unit on `none` becomes
@@ -474,14 +537,16 @@ osmotool profile releases/v10 -1 R1.fq.gz -2 R2.fq.gz --catalog my_catalog_v10 -
   but only for strains in the catalog), `raw_count` stays NA.
 - The catalog is tied to the release whose HMMs annotated it (checked by
   checksum) and to the aligner that indexed it (`catalog.json`). A shipped
-  catalog always matches its release. bwa-mem3 is
+  catalog always matches its release, and `aln_stats.tsv` records which
+  catalog, release and HMM checksum a run used. bwa-mem3 is
   the default (bioconda `bwa-mem3`; needs AVX2 on x86-64, or ARM NEON);
   `--aligner bwa-mem2` also works, and `--aligner_bin` points at
   another executable with the same CLI and index format.
 - Catalog-bound: above 97% identity only strains whose genes are in the
   catalog are seen. That suits well-catalogued communities such as the human
   gut; for environmental and halophile samples most reads fall back to
-  translated search.
+  translated search, and `profile` warns when the catalog settled less than
+  half of the assigned fragments (`catalog_settled_fraction`).
 - Accuracy is that of the full-length annotation (`annotate --method hmm`),
   including its errors: paralogs the HMMs confuse at full length (e.g. some
   opu permeases) and genes just below a gathering cutoff are not fixed by the
@@ -757,6 +822,10 @@ assembly+binning step) on the same samples.
 | `--total_reads` | *(counted)* | `profile` only. Alternative to `--total_fragments`: reads summed over all input files (R1 + R2), halved for paired-end |
 | `--method` | `hmm` (annotate only) | `diamond`, `hmm`, or `both`. `profile` is DIAMOND-only (HMM's GA cutoffs don't apply to short read fragments); `annotate` defaults to HMM since it's meaningfully more specific on full-length ORFs. Requires `hmms/osmo_refdb.hmm` present in `DATABASE` for `hmm`/`both` |
 | `--no_cascade` | off (cascade on by default) | `profile` only. Disables the DIAMOND+HMM cascade, which by default gives reads whose DIAMOND call lands on a family with demonstrated precision problems (several as low as 5-25% DIAMOND-only precision) a second opinion from `hmmsearch`, using `DATABASE`'s `osmo_refdb.profile_cascade.tsv` + `hmms/osmo_refdb.hmm`. The cascade requires `orfm`+`hmmsearch` on PATH and both files present in `DATABASE`; pass this flag to run DIAMOND-only if you don't have them |
+| `--habitat` | the one catalog `DATABASE` ships | `profile` only. Which of `DATABASE`'s `catalogs/<name>/` to use; needed only when it ships several — see [Gene catalog](#gene-catalog-profile-mode) |
+| `--catalog_only` | off | `profile` only. Count catalog-settled reads only; no translated search for the rest |
+| `--catalog_min_identity` / `--catalog_min_aligned` | 0.97 / 45 | `profile` only (tuning). Nucleotide identity and aligned bp for a read to be settled by the catalog |
+| `--translated_only` | off | `profile` only (benchmarking). Skip the catalog; translated search for every read |
 | `--no_markers` | off (on whenever `DATABASE` has `markers/`) | `profile` only. Skips the marker-gene DIAMOND pass and the `copies_per_genome` column / `markers.tsv` (see [Copies per genome](#copies-per-genome-profile-mode)) |
 | `--proteins` | none | `annotate` only. Pre-called protein FASTA (skip Prodigal) |
 | `--keep_aln` / `--keep_proteins` | off | Retain intermediate alignment/protein files instead of deleting them after the run |
@@ -803,7 +872,7 @@ module load anaconda3
 conda activate osmotool
 
 osmotool profile \
-    /path/to/osmo_refdb/releases/v9 \
+    /path/to/osmo_refdb/releases/v10 \
     -1 ${SAMPLE}_R1.fastq.gz \
     -2 ${SAMPLE}_R2.fastq.gz \
     --out_prefix results/${SAMPLE} \
@@ -816,7 +885,7 @@ osmotool profile \
 FASTQ lands there instead of on the shared filesystem.
 
 `--total_fragments` accepts a pre-computed count (e.g. from FastQC/MultiQC)
-to skip the `zcat | wc -l` step on very large files: for paired-end, the read
+to skip counting the reads of very large files: for paired-end, the read
 count of R1 alone (= pairs), not R1 + R2. `--total_reads` takes R1 + R2 instead.
 
 ## Versioning
@@ -838,6 +907,10 @@ pip install -e ".[dev]"
 pytest
 ```
 
-## License
+## License and citation
 
-MIT
+osmotool is released under the MIT license (see [LICENSE](LICENSE)). The
+osmo_refdb releases it downloads carry their own terms; see the release's
+README. [CITATIONS.md](CITATIONS.md) lists the tools and methods osmotool
+builds on; cite the ones your run used, together with the DOI of the
+osmo_refdb release you used.

@@ -11,7 +11,7 @@ from pathlib import Path
 from osmotool.handle_args import build_parser
 from osmotool.runners import run_profile, run_annotate
 from osmotool.download import download_refdb
-from osmotool.utils import setup_logging, resolve_refdb, check_tool, default_catalog
+from osmotool.utils import setup_logging, resolve_refdb, check_tool, choose_catalog
 from osmotool.catalog import build_catalog, index_catalog, load_catalog
 from osmotool.functions import fragments_from_reads, load_excluded_families
 from osmotool.nacl import (annotate_method_and_release, load_nacl_model,
@@ -62,23 +62,27 @@ def main(argv: list[str] | None = None) -> int:
                 )
             catalog = None
             try:
-                catalog_dir = default_catalog(refdb, args.catalog, args.no_catalog)
+                catalog_dir = choose_catalog(refdb, habitat=args.habitat,
+                                             catalog_dir=args.catalog_dir,
+                                             translated_only=args.translated_only)
             except ValueError as e:
                 parser.error(str(e))
             if catalog_dir is not None:
                 if refdb.hmm is None:
                     parser.error(f"the catalog needs hmms/osmo_refdb.hmm in {args.database} "
                                  "to check it was annotated with this release")
-                if args.catalog is None:
-                    log.info("Using the gene catalog %s ships: %s (--no_catalog for "
-                             "translated search only).", args.database, catalog_dir.name)
                 catalog = load_catalog(catalog_dir, hmm_db=refdb.hmm,
                                        aligner_bin=args.aligner_bin,
                                        index_dir=args.catalog_index)
+                if args.catalog_dir is None:
+                    # shipped with the release, so versioned with it
+                    catalog.release = refdb.release
+                log.info("Assigning reads against the %s gene catalog (osmo_refdb %s) first; "
+                         "the rest go to translated search.", catalog.name, catalog.release)
             elif args.catalog_index is not None:
-                parser.error("--catalog_index needs a catalog (--catalog, or one the release ships)")
+                parser.error("--catalog_index needs the catalog, which --translated_only skips")
             elif args.catalog_only:
-                parser.error("--catalog_only needs a catalog (--catalog, or one the release ships)")
+                parser.error("--catalog_only and --translated_only exclude each other")
             if refdb.report_levels is None:
                 log.info("No osmo_refdb.profile_report_levels.tsv in %s: no unit_counts.tsv "
                          "(release predates report levels).", args.database)

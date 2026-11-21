@@ -14,3 +14,6 @@ venv/
 
 # Local tool settings
 .claude/
+
+# macOS
+.DS_Store

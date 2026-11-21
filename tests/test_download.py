@@ -353,3 +353,12 @@ class TestSafeExtractall:
         with tarfile.open(archive_path) as tar:
             with pytest.raises(RuntimeError, match="unsafe path"):
                 _safe_extractall(tar, dest)
+
+
+def test_annotate_only_release_warns(tmp_path, caplog):
+    from osmotool.download import ANNOTATE_ONLY_RELEASES, RELEASES, download_refdb
+    assert ANNOTATE_ONLY_RELEASES <= set(RELEASES)
+    (tmp_path / "v9").mkdir()          # already there: no network
+    with caplog.at_level("WARNING", logger="osmotool"):
+        download_refdb("v9", tmp_path)
+    assert "v9 ships no gene catalog" in caplog.text and "v10" in caplog.text
