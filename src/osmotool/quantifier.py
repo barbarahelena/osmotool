@@ -250,7 +250,7 @@ def aggregate_report_units(
     report_level None and status "not_in_manifest", so no read disappears
     from the table unannounced.
 
-    sources (``profile --catalog``): {family: (catalog_count,
+    sources (``profile`` with a catalog): {family: (catalog_count,
       catalog_ambiguous, translated_count)}; rows get all three, summed over
       members. An excluded unit then becomes status "catalog_only": the
       catalog's full-length calls are reliable at gene level, so its catalog

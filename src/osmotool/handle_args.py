@@ -7,7 +7,7 @@ from __future__ import annotations
 import argparse
 from importlib.metadata import PackageNotFoundError, version
 
-from osmotool.download import RELEASES, LATEST_RELEASE
+from osmotool.download import ANNOTATE_ONLY_RELEASES, RELEASES, LATEST_RELEASE
 
 try:
     __version__ = version("osmotool")
@@ -117,21 +117,33 @@ def _add_hpc_args(p: argparse.ArgumentParser) -> None:
 def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "profile",
-        help="Profile FASTQ reads against osmodiamond (diamond blastx).",
+        help="Profile FASTQ reads: gene catalog first, translated search for the rest.",
+        description="Profile osmoadaptation genes in FASTQ reads, in two steps. "
+                    "1) Reads are assigned against the release's gene catalog, "
+                    "annotated once at full length with the release's HMMs: a "
+                    "read matching a catalog gene near-exactly takes that "
+                    "gene's family. 2) Whatever the catalog cannot settle falls "
+                    "through to translated search (diamond blastx, then the "
+                    "DIAMOND+HMM cascade for families DIAMOND confuses). "
+                    "Needs an osmo_refdb release that ships a catalog (v10 or "
+                    "later).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
         "database", metavar="DATABASE",
-        help="Path to an unpacked osmo_refdb release directory (e.g. "
-             "releases/v9/). osmotool finds osmo_refdb.dmnd, "
-             "hmms/osmo_refdb.hmm, osmo_refdb.profile_cascade.tsv, "
-             "osmo_refdb.profile_excluded_families.txt and (v10+) "
+        help="Path to an unpacked osmo_refdb release directory (v10 or "
+             "later, e.g. releases/v10/). osmotool finds the gene catalog "
+             "under catalogs/, osmo_refdb.dmnd, hmms/osmo_refdb.hmm, "
+             "osmo_refdb.profile_cascade.tsv, "
+             "osmo_refdb.profile_excluded_families.txt and "
              "osmo_refdb.profile_report_levels.tsv inside it by their "
              "fixed names -- no need to point at each file separately. With "
              "the report levels, <out_prefix>.unit_counts.tsv is written "
              "next to gene_counts.tsv: one row per reporting unit (a gene, "
              "or a paralog group short reads can't split), with units not "
-             "reliable at any level listed as excluded.",
+             "reliable at any level listed as excluded. The levels were "
+             "decided on translated-search calibration reads, so they "
+             "describe step 2; catalog-settled reads are full-length calls.",
     )
 
     reads = p.add_argument_group("reads (paired-end or single-end)")
@@ -170,7 +182,56 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
              "contain a short partial ORF.",
     )
 
-    cascade = p.add_argument_group("DIAMOND+HMM cascade")
+    cat = p.add_argument_group(
+        "gene catalog",
+        "Reads are first assigned against the gene catalog DATABASE ships, "
+        "annotated at full length with DATABASE's HMMs; whatever the catalog "
+        "cannot settle falls through to translated search (DIAMOND + the "
+        "cascade).")
+    cat.add_argument(
+        "--habitat", metavar="NAME", default=None,
+        help="Which of DATABASE's catalogs (catalogs/NAME/) to assign reads "
+             "against. Needed only when the release ships more than one; "
+             "osmo_refdb v10 ships gmgc_gut alone.",
+    )
+    # A catalog built locally with `osmotool build-catalog` for DATABASE's
+    # HMMs, used instead of the one DATABASE ships. Kept out of the main help
+    # (documented in the README): a shipped catalog is versioned with its
+    # release, a local one is the user's to keep in step.
+    cat.add_argument("--catalog_dir", metavar="DIR", default=None, help=argparse.SUPPRESS)
+    cat.add_argument(
+        "--catalog_only", action="store_true", default=False,
+        help="Count catalog-settled reads only; skip translated search for "
+             "the rest. Only sensible when the community is well covered by "
+             "the catalog (e.g. human gut with a gut catalog).",
+    )
+    cat.add_argument(
+        "--catalog_index", metavar="DIR", default=None,
+        help="Map against this full index of the catalog's genes (built by "
+             "`osmotool index-catalog`, distributed separately from the "
+             "release) instead of the index the catalog ships. Must be built "
+             "from the same gene file the catalog was annotated from.",
+    )
+    cat.add_argument(
+        "--aligner_bin", metavar="EXE", default=None,
+        help="Map with this executable instead of the one recorded in the "
+             "catalog (same CLI and index format, e.g. a reimplementation).",
+    )
+
+    tune = p.add_argument_group("catalog tuning")
+    tune.add_argument(
+        "--catalog_min_identity", type=float, default=0.97, metavar="FRAC",
+        help="Minimum nucleotide identity (1 - NM / alignment columns) for a "
+             "read to be settled by the catalog.",
+    )
+    tune.add_argument(
+        "--catalog_min_aligned", type=int, default=45, metavar="BP",
+        help="Minimum aligned read bases for a read to be settled by the catalog "
+             "(soft-clipped ends, e.g. a read running off a gene end, don't count). "
+             "0.97 / 45 are Cayman's defaults.",
+    )
+
+    cascade = p.add_argument_group("translated search: DIAMOND+HMM cascade")
     cascade.add_argument(
         "--no_cascade", action="store_true", default=False,
         help="Disable the DIAMOND+HMM cascade (on by default). The cascade "
@@ -184,58 +245,6 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
              "dataset. Requires orfm + hmmsearch on PATH, and both files "
              "present in DATABASE; pass this flag to run DIAMOND-only if "
              "you don't have them.",
-    )
-
-    cat = p.add_argument_group("gene catalog (built once with `osmotool build-catalog`)")
-    cat.add_argument(
-        "--catalog", metavar="NAME|DIR", default=None,
-        help="Assign reads to a gene catalog annotated at full length before "
-             "translated search. Default: the catalog DATABASE ships under "
-             "catalogs/ when it ships exactly one (pass NAME to choose when it "
-             "ships several; --no_catalog for translated search only). NAME is "
-             "a catalog DATABASE ships under catalogs/NAME/ (index and "
-             "annotation, versioned with the release); DIR is a catalog built "
-             "with `osmotool build-catalog`. "
-             "Reads aligned (bwa-mem3, as the catalog was built) at >= "
-             "--catalog_min_identity over >= --catalog_min_aligned bp take the "
-             "catalog gene's HMM annotation; only the rest go to DIAMOND + the "
-             "cascade. gene_counts.tsv and unit_counts.tsv then show "
-             "catalog_count, catalog_ambiguous and translated_count. The "
-             "catalog must have been built with DATABASE's HMMs.",
-    )
-    cat.add_argument(
-        "--no_catalog", action="store_true", default=False,
-        help="Translated search only (DIAMOND + the cascade), even when "
-             "DATABASE ships a catalog.",
-    )
-    cat.add_argument(
-        "--catalog_min_identity", type=float, default=0.97, metavar="FRAC",
-        help="Minimum nucleotide identity (1 - NM / alignment columns) for a "
-             "read to be settled by the catalog.",
-    )
-    cat.add_argument(
-        "--catalog_min_aligned", type=int, default=45, metavar="BP",
-        help="Minimum aligned read bases for a read to be settled by the catalog "
-             "(soft-clipped ends, e.g. a read running off a gene end, don't count). "
-             "0.97 / 45 are Cayman's defaults.",
-    )
-    cat.add_argument(
-        "--catalog_only", action="store_true", default=False,
-        help="Count catalog-settled reads only; skip DIAMOND and the cascade for "
-             "the rest. Only sensible when the community is well covered by the "
-             "catalog (e.g. human gut with a gut catalog).",
-    )
-    cat.add_argument(
-        "--catalog_index", metavar="DIR", default=None,
-        help="Map against this full index of the catalog's genes (built by "
-             "`osmotool index-catalog`, distributed separately from the "
-             "release) instead of the index the catalog ships, if any. Must "
-             "be built from the same gene file the catalog was annotated from.",
-    )
-    cat.add_argument(
-        "--aligner_bin", metavar="EXE", default=None,
-        help="Map with this executable instead of the one recorded in the "
-             "catalog (same CLI and index format, e.g. a reimplementation).",
     )
 
     norm = p.add_argument_group("copies-per-genome normalisation")
@@ -255,13 +264,22 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
     _add_output_args(p)
     _add_hpc_args(p)
 
+    bench = p.add_argument_group("benchmarking")
+    bench.add_argument(
+        "--translated_only", action="store_true", default=False,
+        help="Skip the catalog and assign every read by translated search "
+             "(DIAMOND + the cascade), for comparing the two. Also runs on a "
+             "release that ships no catalog.",
+    )
+
 
 # ---------------------------------------------------------------------------
 # download-db subcommand
 # ---------------------------------------------------------------------------
 
 def _add_download_parser(sub: argparse._SubParsersAction) -> None:
-    known = ", ".join(sorted(RELEASES))
+    known = ", ".join(f"{r} (annotate only)" if r in ANNOTATE_ONLY_RELEASES else r
+                      for r in sorted(RELEASES, key=lambda r: int(r.lstrip("v"))))
     p = sub.add_parser(
         "download-db",
         help="Download and unpack an osmo_refdb release from Zenodo.",
@@ -276,7 +294,7 @@ def _add_download_parser(sub: argparse._SubParsersAction) -> None:
         "--location", default=".", metavar="DIR",
         help="Directory to download and unpack into. The release unpacks "
              "into a subdirectory named after the release (e.g. "
-             "<location>/v9/) -- pass that path as osmotool's DATABASE "
+             "<location>/v10/) -- pass that path as osmotool's DATABASE "
              "argument.",
     )
     p.add_argument(
@@ -327,7 +345,7 @@ def _add_predict_nacl_parser(sub: argparse._SubParsersAction) -> None:
 def _add_build_catalog_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "build-catalog",
-        help="Annotate a gene catalog once at full length for `profile --catalog`.",
+        help="Annotate a gene catalog once at full length for `profile --catalog_dir`.",
         description="Translate a nucleotide gene catalog (e.g. a prevalence-"
                     "filtered GMGC subset, or UHGG genes), search it with "
                     "DATABASE's HMMs under their gathering cutoffs (the decision "
@@ -374,7 +392,7 @@ def _add_index_catalog_parser(sub: argparse._SubParsersAction) -> None:
         "index-catalog",
         help="Build the full, competitive index of a gene catalog (release-independent).",
         description="Index every gene of a catalog with bwa-mem3 (default) for "
-                    "`profile --catalog NAME --catalog_index DIR`. The index depends "
+                    "`profile --catalog_index DIR`. The index depends "
                     "only on the gene file and the aligner, not on an osmo_refdb "
                     "release, so it is built and distributed once and reused across "
                     "releases; profile checks it was built from the same gene file "
@@ -397,7 +415,7 @@ def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "database", metavar="DATABASE",
         help="Path to an unpacked osmo_refdb release directory (e.g. "
-             "releases/v9/). osmotool finds osmo_refdb.dmnd, "
+             "releases/v10/). osmotool finds osmo_refdb.dmnd, "
              "hmms/osmo_refdb.hmm, osmo_refdb.diamond_cutoffs.tsv, and "
              "osmo_refdb.annotate_excluded_families.txt inside it by "
              "their fixed names -- no need to point at each file "

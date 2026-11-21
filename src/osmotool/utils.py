@@ -135,6 +135,8 @@ class RefDb:
     nacl_model: Path | None = None    # nacl_model/ directory (annotate only)
     report_levels: Path | None = None  # osmo_refdb.profile_report_levels.tsv (profile only)
     catalogs: dict[str, Path] = field(default_factory=dict)  # catalogs/<name>/ (profile only)
+    root: Path = Path(".")
+    release: str = ""                 # PROVENANCE.json's release, else the directory name
 
 
 def _resolve_markers(root: Path) -> MarkerDb | None:
@@ -188,36 +190,64 @@ def _resolve_catalogs(root: Path) -> dict[str, Path]:
             if sub.is_dir() and (sub / "catalog.json").exists()}
 
 
-def select_catalog(refdb: RefDb, value: str) -> Path:
-    """`profile --catalog VALUE`: the name of a catalog the release ships, or
-    the path of a catalog directory built separately with `build-catalog`."""
-    if value in refdb.catalogs:
-        return refdb.catalogs[value]
-    path = Path(value)
-    if (path / "catalog.json").exists():
+FIRST_CATALOG_RELEASE = "v10"
+
+
+def choose_catalog(refdb: RefDb, *, habitat: str | None = None,
+                   catalog_dir: str | None = None,
+                   translated_only: bool = False) -> Path | None:
+    """The catalog `profile` assigns reads against.
+
+    The one catalog the release ships, by default; ``--habitat NAME`` picks
+    one when it ships several (which habitat fits a sample is not something
+    to guess); ``--catalog_dir DIR`` is a catalog built locally with
+    `build-catalog`. None only with ``--translated_only``.
+
+    A release that ships no catalog is an error rather than a quiet
+    translated-only run: the user would get translated search believing they
+    got the catalog."""
+    if translated_only:
+        if habitat is not None or catalog_dir is not None:
+            raise ValueError("--translated_only skips the catalog: drop --habitat / --catalog_dir")
+        return None
+    if catalog_dir is not None:
+        if habitat is not None:
+            raise ValueError("--habitat and --catalog_dir exclude each other")
+        path = Path(catalog_dir)
+        if not (path / "catalog.json").exists():
+            raise ValueError(f"--catalog_dir {catalog_dir}: not a catalog directory "
+                             "(no catalog.json); build one with `osmotool build-catalog`")
         return path
-    shipped = ", ".join(refdb.catalogs) or "none"
-    raise ValueError(f"--catalog {value}: neither a catalog this release ships ({shipped}) "
-                     "nor a catalog directory (no catalog.json)")
-
-
-def default_catalog(refdb: RefDb, value: str | None, no_catalog: bool = False) -> Path | None:
-    """The catalog `profile` uses: --catalog VALUE when given, else the one
-    catalog the release ships, None with --no_catalog or when it ships none.
-    A release shipping several needs --catalog NAME: which habitat fits a
-    sample is not something to guess."""
-    if no_catalog:
-        if value is not None:
-            raise ValueError("--catalog and --no_catalog exclude each other")
-        return None
-    if value is not None:
-        return select_catalog(refdb, value)
     if not refdb.catalogs:
-        return None
+        raise ValueError(
+            f"osmo_refdb {refdb.release} ({refdb.root}) ships no gene catalog, and "
+            f"profile assigns reads against one first. Use osmo_refdb "
+            f"{FIRST_CATALOG_RELEASE} or later; older releases are annotate-only "
+            "(--translated_only runs translated search alone, for benchmarking)")
+    if habitat is not None:
+        if habitat not in refdb.catalogs:
+            raise ValueError(f"--habitat {habitat}: osmo_refdb {refdb.release} ships "
+                             f"catalogs for {', '.join(refdb.catalogs)}")
+        return refdb.catalogs[habitat]
     if len(refdb.catalogs) > 1:
-        raise ValueError(f"the release ships several gene catalogs ({', '.join(refdb.catalogs)}): "
-                         "pass --catalog NAME, or --no_catalog for translated search only")
+        raise ValueError(f"osmo_refdb {refdb.release} ships catalogs for several habitats "
+                         f"({', '.join(refdb.catalogs)}): pass --habitat NAME")
     return next(iter(refdb.catalogs.values()))
+
+
+def release_name(root: Path) -> str:
+    """The release's name: PROVENANCE.json's ``release`` (osmo_refdb v10+),
+    else the directory's name (download-db unpacks into ``<location>/<release>/``)."""
+    prov = root / "PROVENANCE.json"
+    if prov.exists():
+        import json
+        try:
+            name = json.loads(prov.read_text()).get("release")
+        except (OSError, ValueError):
+            name = None
+        if name:
+            return str(name)
+    return root.resolve().name
 
 
 def resolve_refdb(database: str, mode: str) -> RefDb:
@@ -234,7 +264,7 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
     mode it also resolves ``osmo_refdb.train_refs.faa``, the optional
     ``markers/`` subdirectory used for copies-per-genome normalisation and
     the optional ``osmo_refdb.profile_report_levels.tsv`` (v10+) and the
-    gene catalogs under ``catalogs/<name>/`` for ``--catalog``; in
+    gene catalogs under ``catalogs/<name>/`` (see choose_catalog); in
     annotate mode, the optional ``nacl_model/`` subdirectory (NaCl-max
     predictor, see nacl.py).
 
@@ -291,4 +321,5 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
         diamond_cutoffs=diamond_cutoffs, exclude_families=exclude_families,
         train_refs=train_refs, markers=markers, nacl_model=nacl_model,
         report_levels=report_levels, catalogs=catalogs,
+        root=root, release=release_name(root),
     )

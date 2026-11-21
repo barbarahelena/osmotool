@@ -234,7 +234,7 @@ def build_catalog(
 ) -> Path:
     """
     Annotate a nucleotide gene catalog once with the release's HMMs and write
-    a catalog directory `profile --catalog` maps reads to.
+    a catalog directory `profile --catalog_dir` maps reads to.
 
     genes:    nucleotide CDS FASTA (gz ok), one gene per record, in frame.
     proteins: optional protein FASTA with the same IDs (e.g. GMGC's .faa);
@@ -487,6 +487,8 @@ class Catalog:
     meta: dict = field(default_factory=dict)
     aligner_bin: str = ALIGNERS[DEFAULT_ALIGNER]["bin"]
     index_kind: str = "all"          # all | hits | neighbours: which genes the index holds
+    name: str = ""                   # the catalog's directory name (catalogs/<name>/)
+    release: str = ""                # the osmo_refdb release whose HMMs annotated it
 
 
 def index_catalog(
@@ -500,8 +502,8 @@ def index_catalog(
     The full, competitive index of a catalog's genes, built separately from
     its annotation. It depends only on the gene file and the aligner, not on
     an osmo_refdb release, so one index serves every release whose catalog
-    was annotated from the same gene file (profile --catalog NAME
-    --catalog_index DIR; checked through the gene file's checksum). Writes
+    was annotated from the same gene file (profile --catalog_index DIR;
+    checked through the gene file's checksum). Writes
     the index (prefix catalog.fna) and catalog_index.json.
     """
     if aligner not in ALIGNERS:
@@ -602,8 +604,12 @@ def load_catalog(path: str | Path, *, hmm_db: str | Path | None = None,
                 others = tuple(parsed)
             genes[f[idx["gene"]]] = CatalogGene(f[idx["label"]], f[idx["status"]],
                                                 int(f[idx["gene_nt"]]), env, others)
+    # catalog.json's release is the DATABASE path build-catalog was given;
+    # profile overrides it with the release's own name for a shipped catalog
+    release = Path(meta["release"]).name if meta.get("release") else ""
     return Catalog(root=root, fna=prefix, genes=genes, meta=meta, index_kind=kind,
-                   aligner_bin=aligner_bin or default_bin or ALIGNERS[aligner]["bin"])
+                   aligner_bin=aligner_bin or default_bin or ALIGNERS[aligner]["bin"],
+                   name=root.resolve().name, release=release)
 
 
 # ---------------------------------------------------------------------------

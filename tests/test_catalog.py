@@ -21,7 +21,8 @@ from osmotool.catalog import (
 from osmotool.functions import ReportUnit
 from osmotool.output import write_gene_counts, write_unit_counts
 from osmotool.quantifier import aggregate_report_units
-from osmotool.utils import default_catalog, resolve_refdb, select_catalog
+from osmotool.runners import _catalog_stats, catalog_settled_fraction, _warn_if_catalog_unsettled
+from osmotool.utils import choose_catalog, release_name, resolve_refdb
 
 
 # ---------------------------------------------------------------------------
@@ -334,38 +335,100 @@ def test_resolve_refdb_finds_release_catalogs(tmp_path: Path):
     assert resolve_refdb(str(rel), mode="annotate").catalogs == {}
 
 
-def test_select_catalog_by_name_or_path(tmp_path: Path):
-    rel = _release_with_catalog(tmp_path)
-    refdb = resolve_refdb(str(rel), mode="profile")
-    assert select_catalog(refdb, "gmgc_gut") == rel / "catalogs" / "gmgc_gut"
-    own = tmp_path / "own"
-    own.mkdir()
-    _catalog_dir(own)
-    assert select_catalog(refdb, str(own)) == own
-    with pytest.raises(ValueError, match="gmgc_gut"):
-        select_catalog(refdb, "marine")
-
-
-def test_default_catalog_is_the_one_the_release_ships(tmp_path: Path):
+def test_choose_catalog_defaults_to_the_one_the_release_ships(tmp_path: Path):
     rel = _release_with_catalog(tmp_path)
     refdb = resolve_refdb(str(rel), mode="profile")
     shipped = rel / "catalogs" / "gmgc_gut"
-    assert default_catalog(refdb, None) == shipped
-    assert default_catalog(refdb, "gmgc_gut") == shipped
-    assert default_catalog(refdb, None, no_catalog=True) is None
-    with pytest.raises(ValueError, match="exclude each other"):
-        default_catalog(refdb, "gmgc_gut", no_catalog=True)
+    assert choose_catalog(refdb) == shipped
+    assert choose_catalog(refdb, habitat="gmgc_gut") == shipped
+    with pytest.raises(ValueError, match="gmgc_gut"):
+        choose_catalog(refdb, habitat="marine")
+    assert choose_catalog(refdb, translated_only=True) is None
+    with pytest.raises(ValueError, match="--translated_only skips the catalog"):
+        choose_catalog(refdb, habitat="gmgc_gut", translated_only=True)
 
 
-def test_default_catalog_none_shipped_or_several(tmp_path: Path):
+def test_choose_catalog_dir_built_locally(tmp_path: Path):
     rel = _release_with_catalog(tmp_path)
     refdb = resolve_refdb(str(rel), mode="profile")
-    assert default_catalog(dataclasses.replace(refdb, catalogs={}), None) is None
+    own = tmp_path / "own"
+    own.mkdir()
+    _catalog_dir(own)
+    assert choose_catalog(refdb, catalog_dir=str(own)) == own
+    with pytest.raises(ValueError, match="not a catalog directory"):
+        choose_catalog(refdb, catalog_dir=str(tmp_path))
+    with pytest.raises(ValueError, match="exclude each other"):
+        choose_catalog(refdb, habitat="gmgc_gut", catalog_dir=str(own))
+    # a local catalog makes a release without one usable
+    bare = dataclasses.replace(refdb, catalogs={})
+    assert choose_catalog(bare, catalog_dir=str(own)) == own
+
+
+def test_choose_catalog_errors_on_a_release_without_one(tmp_path: Path):
+    rel = _release_with_catalog(tmp_path)
+    refdb = dataclasses.replace(resolve_refdb(str(rel), mode="profile"), catalogs={})
+    with pytest.raises(ValueError, match=r"osmo_refdb v99 .* ships no gene catalog.*v10 or later"):
+        choose_catalog(refdb)
+    assert choose_catalog(refdb, translated_only=True) is None
+
+
+def test_choose_catalog_several_needs_habitat(tmp_path: Path):
+    rel = _release_with_catalog(tmp_path)
+    refdb = resolve_refdb(str(rel), mode="profile")
     several = dataclasses.replace(refdb, catalogs={"gmgc_gut": rel / "catalogs" / "gmgc_gut",
                                                    "marine": tmp_path / "marine"})
-    with pytest.raises(ValueError, match="several gene catalogs"):
-        default_catalog(several, None)
-    assert default_catalog(several, "gmgc_gut") == rel / "catalogs" / "gmgc_gut"
+    with pytest.raises(ValueError, match="several habitats.*--habitat"):
+        choose_catalog(several)
+    assert choose_catalog(several, habitat="gmgc_gut") == rel / "catalogs" / "gmgc_gut"
+
+
+def test_release_name_from_provenance_or_directory(tmp_path: Path):
+    rel = tmp_path / "db"
+    rel.mkdir()
+    assert release_name(rel) == "db"
+    (rel / "PROVENANCE.json").write_text(json.dumps({"release": "v10"}))
+    assert release_name(rel) == "v10"
+    (rel / "PROVENANCE.json").write_text("not json")
+    assert release_name(rel) == "db"
+
+
+def test_catalog_stats_identify_the_catalog(tmp_path: Path):
+    rel = _release_with_catalog(tmp_path)
+    cat_dir = rel / "catalogs" / "gmgc_gut"
+    meta = json.loads((cat_dir / "catalog.json").read_text())
+    meta["release"] = "releases/v99"
+    (cat_dir / "catalog.json").write_text(json.dumps(meta))
+    catalog = load_catalog(cat_dir)
+    assert catalog.name == "gmgc_gut" and catalog.release == "v99"
+    res = settle_records([], catalog, paired=False, min_identity=0.97, min_aligned=45)
+    stats = _catalog_stats(catalog, res, True, 0.25)
+    assert stats["catalog"] == "gmgc_gut"
+    assert stats["catalog_release"] == "v99"
+    assert stats["catalog_hmm_sha256"] == "abc"
+    assert stats["catalog_dir"] == str(cat_dir)
+    assert stats["catalog_settled_fraction"] == "0.2500"
+    assert _catalog_stats(catalog, res, True, None)["catalog_settled_fraction"] == "NA"
+    assert _catalog_stats(None, None, True) == {"catalog": "none (--translated_only)"}
+
+
+def test_catalog_settled_fraction():
+    assert catalog_settled_fraction(None) is None
+    assert catalog_settled_fraction({"ectA": (0.0, 0.0, 0.0)}) is None
+    # (3 + 1) settled of (3 + 1 + 4)
+    assert catalog_settled_fraction({"ectA": (3.0, 0.5, 1.0), "ectB": (0.0, 0.5, 3.0)}) == 0.5
+
+
+def test_warn_when_catalog_settles_little(tmp_path: Path, caplog):
+    catalog = load_catalog(_catalog_dir(tmp_path))
+    with caplog.at_level("WARNING", logger="osmotool"):
+        _warn_if_catalog_unsettled(catalog, 0.1, translated_fallback=True)
+    assert "catalog settled 10.0%" in caplog.text and tmp_path.name in caplog.text
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="osmotool"):
+        _warn_if_catalog_unsettled(catalog, 0.9, translated_fallback=True)
+        _warn_if_catalog_unsettled(catalog, None, translated_fallback=True)
+        _warn_if_catalog_unsettled(catalog, 0.1, translated_fallback=False)   # --catalog_only
+    assert caplog.text == ""
 
 
 # ---------------------------------------------------------------------------
@@ -409,3 +472,35 @@ def test_find_neighbours_with_bwa_mem3(tmp_path: Path):
     best = find_neighbours(genes, hits_fna, {"hit"}, work, aligner_bin="bwa-mem3", threads=1)
     assert set(best) == {"near"} and best["near"] >= 0.90
     assert not work.exists()
+
+
+# ---------------------------------------------------------------------------
+# the profile CLI
+# ---------------------------------------------------------------------------
+
+def test_profile_errors_on_a_release_without_a_catalog(tmp_path: Path, capsys):
+    from osmotool.__main__ import main
+    rel = tmp_path / "v9"
+    rel.mkdir()
+    (rel / "osmo_refdb.dmnd").write_text("")
+    with pytest.raises(SystemExit) as exc:
+        main(["profile", str(rel), "--singles", "r.fq", "--out_prefix", str(tmp_path / "o"),
+              "--no_cascade", "--no_markers"])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "osmo_refdb v9" in err and "ships no gene catalog" in err and "v10" in err
+
+
+def test_profile_help_shows_one_mode():
+    from osmotool.handle_args import build_parser
+    sub = build_parser()._subparsers._group_actions[0].choices["profile"]
+    text = sub.format_help()
+    assert "--habitat" in text and "--translated_only" in text
+    assert "--catalog_dir" not in text            # out of the main help
+    assert "--no_catalog" not in text and "--catalog " not in text
+    groups = {g.title: [a.dest for a in g._group_actions] for g in sub._action_groups}
+    assert groups["benchmarking"] == ["translated_only"]
+    assert groups["catalog tuning"] == ["catalog_min_identity", "catalog_min_aligned"]
+    args = build_parser().parse_args(["profile", "db", "--singles", "r", "--out_prefix", "o",
+                                      "--catalog_dir", "mine"])
+    assert args.catalog_dir == "mine"

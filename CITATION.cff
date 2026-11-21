@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: >-
+  If you use osmotool, please cite it as below, together with the DOI of the
+  osmo_refdb release you ran it with.
+title: osmotool
+abstract: >-
+  Screen osmoadaptation genes in metagenomic reads and assembled genomes:
+  reads are assigned against an annotated gene catalog first, with
+  translated search (DIAMOND + HMMER) for the rest.
+type: software
+authors:
+  - family-names: Verhaar
+    given-names: Barbara
+repository-code: "https://github.com/barbarahelena/osmotool"
+license: MIT
+keywords:
+  - metagenomics
+  - osmoadaptation
+  - DIAMOND
+  - HMMER
+  - gene catalog
+# version, date-released and doi: fill in at the v0.10.0 tag / Zenodo upload

@@ -284,6 +284,9 @@ def run_profile(
         if sources is not None:
             sources = {f: v for f, v in sources.items() if f not in excluded}
     rpm = compute_rpm(counts, total_fragments)
+    settled_fraction = catalog_settled_fraction(sources)
+    if catalog is not None:
+        _warn_if_catalog_unsettled(catalog, settled_fraction, translated_fallback)
 
     # --- copies per genome, via universal single-copy markers ---
     copies, marker_stats = None, None
@@ -338,7 +341,7 @@ def run_profile(
         evalue=evalue,
         note_systems=PROFILE_SYSTEMS_NOTE,
         extra={**(marker_stats or {}), **unit_stats, **_catalog_stats(catalog, cat,
-               translated_fallback)} or None,
+               translated_fallback, settled_fraction)} or None,
     )
     stats_path = write_aln_stats(out_prefix, stats)
 
@@ -353,11 +356,50 @@ def run_profile(
     return counts_path, stats_path
 
 
-def _catalog_stats(catalog: Catalog | None, cat, translated_fallback: bool) -> dict:
+#: Below this share of panel-assigned fragments settled by the catalog,
+#: profile warns that the catalog may not fit the sample. Not calibrated: a
+#: starting point, between a well-catalogued gut sample (most panel reads
+#: settled) and environmental reads against a gut catalog (almost none).
+CATALOG_MIN_SETTLED = 0.5
+
+
+def catalog_settled_fraction(sources: dict[str, tuple[float, float, float]] | None
+                             ) -> float | None:
+    """Share of panel-assigned fragments the catalog settled:
+    (catalog_count + catalog_ambiguous) / (that + translated_count), summed
+    over the reported families. None when nothing was assigned.
+
+    Counted over panel assignments rather than all reads, because a release's
+    index holds only the catalog's panel genes and their neighbours: most
+    reads of any sample map nowhere in it, so a fraction over all reads would
+    be small for a well-fitting catalog too."""
+    if not sources:
+        return None
+    settled = sum(c + a for c, a, _ in sources.values())
+    total = settled + sum(t for _, _, t in sources.values())
+    return settled / total if total > 0 else None
+
+
+def _warn_if_catalog_unsettled(catalog: Catalog, fraction: float | None,
+                               translated_fallback: bool) -> None:
+    if fraction is None or not translated_fallback or fraction >= CATALOG_MIN_SETTLED:
+        return
+    log.warning(
+        "The %s catalog settled %.1f%% of the panel-assigned fragments (below %.0f%%); "
+        "the rest came from translated search. The sample may be from a habitat the "
+        "catalog does not cover: counts are valid, but mostly translated-search counts.",
+        catalog.name, 100 * fraction, 100 * CATALOG_MIN_SETTLED)
+
+
+def _catalog_stats(catalog: Catalog | None, cat, translated_fallback: bool,
+                   settled_fraction: float | None = None) -> dict:
     if catalog is None:
-        return {}
+        return {"catalog": "none (--translated_only)"}
     return {
-        "catalog": str(catalog.root),
+        "catalog": catalog.name,
+        "catalog_release": catalog.release or "unknown",
+        "catalog_hmm_sha256": catalog.meta.get("hmm_sha256", "unknown"),
+        "catalog_dir": str(catalog.root),
         "catalog_aligner": catalog.aligner_bin,
         "catalog_index": f"{catalog.index_kind} ({catalog.fna.parent})",
         "catalog_reads_called": cat.n_called,
@@ -366,6 +408,8 @@ def _catalog_stats(catalog: Catalog | None, cat, translated_fallback: bool) -> d
         "catalog_dropped_by_reason": ",".join(f"{k}:{v}" for k, v in
                                               sorted(cat.dropped_by_reason.items())) or "none",
         "catalog_reads_fallback": cat.n_fallback,
+        "catalog_settled_fraction": ("NA" if settled_fraction is None
+                                     else f"{settled_fraction:.4f}"),
         "translated_fallback": "yes" if translated_fallback else "no",
     }
 

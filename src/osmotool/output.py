@@ -61,7 +61,7 @@ def write_gene_counts(
         the assembly has no A/C/G/T), ``# n_contigs`` and ``# contig_n50``.
         ``profile`` leaves this None, so its output is unchanged.
     count_sources:
-        ``profile --catalog`` only: {family: (catalog_count,
+        ``profile`` with a catalog: {family: (catalog_count,
         catalog_ambiguous, translated_count)}; adds those three columns after
         the normalised value. raw_count is catalog_count + translated_count;
         catalog_ambiguous (reads with equally valid catalog placements on
@@ -149,7 +149,7 @@ def write_unit_counts(
     carry NA, never 0: they were not reliable at any level, so the table
     says nothing about whether those genes are there.
 
-    with_sources (``profile --catalog``) adds catalog_count,
+    with_sources (``profile`` with a catalog) adds catalog_count,
     catalog_ambiguous and translated_count after RPM. An excluded unit then
     has status catalog_only: its catalog counts are reported (full-length
     annotation, so reliable, but only for strains in the catalog), raw_count
