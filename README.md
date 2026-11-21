@@ -911,5 +911,6 @@ pytest
 
 osmotool is released under the MIT license (see [LICENSE](LICENSE)). The
 osmo_refdb releases it downloads carry their own terms; see the release's
-README. To cite osmotool, use [CITATION.cff](CITATION.cff) (GitHub's "Cite
-this repository"), together with the DOI of the osmo_refdb release you used.
+README. [CITATIONS.md](CITATIONS.md) lists the tools and methods osmotool
+builds on; cite the ones your run used, together with the DOI of the
+osmo_refdb release you used.
