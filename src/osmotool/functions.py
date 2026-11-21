@@ -898,8 +898,8 @@ def count_fragments(
     of sync) are warned about, and count (n1 + n2) / 2 -- the sum of the
     read weights, so the numerator and denominator stay consistent.
 
-    Reads are counted with ``zcat | wc -l`` (gzipped) or ``wc -l`` (plain)
-    via the shell -- far faster than iterating in Python on the large files
+    Reads are counted with ``gzip -dc | wc -l`` (gzipped) or ``wc -l`` (plain)
+    -- far faster than iterating in Python on the large files
     common on HPC -- falling back to pure Python if that fails.
     """
     if reads1 is not None and reads2 is not None:
@@ -924,19 +924,27 @@ def fragments_from_reads(total_reads: int, *, paired: bool) -> int | float:
 
 
 def _count_reads_file(path: Path) -> int:
-    """Count reads in a single FASTQ file using the shell (fast path)."""
-    is_gz = str(path).endswith(".gz")
+    """Count reads in a single FASTQ file with ``gzip -dc | wc -l`` or
+    ``wc -l`` (fast path), falling back to Python if either fails.
+
+    No shell: both exit codes are checked, so a failing decompressor can't
+    hide behind ``wc``'s success and report 0 reads. (``zcat`` was used here
+    before, and on macOS it looks for ``<file>.Z`` and fails.)"""
     try:
-        if is_gz:
-            # zcat → wc -l; use pipefail so errors surface
-            cmd = f"zcat {path} | wc -l"
-        else:
-            cmd = f"wc -l < {path}"
-        result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, check=True
-        )
-        line_count = int(result.stdout.strip().split()[0])
-        return line_count // 4
+        with open(path, "rb") as fh:
+            if str(path).endswith(".gz"):
+                gz = subprocess.Popen(["gzip", "-dc"], stdin=fh, stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL)
+                wc = subprocess.run(["wc", "-l"], stdin=gz.stdout, capture_output=True,
+                                    text=True)
+                gz.stdout.close()
+                if gz.wait() != 0:
+                    raise RuntimeError("gzip -dc failed")
+            else:
+                wc = subprocess.run(["wc", "-l"], stdin=fh, capture_output=True, text=True)
+        if wc.returncode != 0:
+            raise RuntimeError("wc -l failed")
+        return int(wc.stdout.strip().split()[0]) // 4
     except Exception:
         log.debug("Shell read-count failed for %s, falling back to Python", path)
         return _count_reads_python(path)
