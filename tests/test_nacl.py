@@ -310,3 +310,20 @@ def test_cli_annotate_predict_nacl_needs_model(tmp_path):
     with pytest.raises(SystemExit):
         main(["annotate", str(tmp_path), str(fasta), "--predict_nacl",
               "--out_prefix", str(tmp_path / "g")])
+
+
+def test_annotate_release_from_provenance_or_directory(tmp_path):
+    import json
+    from osmotool.nacl import annotate_method_and_release
+    rel = tmp_path / "osmo_refdb_v10"          # unpacked by hand, not renamed
+    (rel / "hmms").mkdir(parents=True)
+    prefix = tmp_path / "g"
+    (tmp_path / "g.aln_stats.tsv").write_text(
+        f"metric\tvalue\nmode\tannotate:hmm\ndb\t{rel / 'hmms' / 'osmo_refdb.hmm'}\n")
+    assert annotate_method_and_release(prefix) == ("hmm", "osmo_refdb_v10")
+    (rel / "PROVENANCE.json").write_text(json.dumps({"release": "v10"}))
+    assert annotate_method_and_release(prefix) == ("hmm", "v10")
+    # the release directory is gone: fall back to the name in the path
+    (tmp_path / "g.aln_stats.tsv").write_text(
+        "metric\tvalue\nmode\tannotate:hmm\ndb\t/gone/v9/hmms/osmo_refdb.hmm\n")
+    assert annotate_method_and_release(prefix) == ("hmm", "v9")

@@ -134,7 +134,7 @@ filename — no need to point at each file separately:
 |---|---|
 | `catalogs/<name>/` | `profile` (the gene catalog; v10+, required) |
 | `osmo_refdb.dmnd` | both (DIAMOND database) |
-| `hmms/osmo_refdb.hmm` (+ `.h3*` indices) | `annotate`'s default `--method hmm`/`both`; `profile`'s cascade (on by default) |
+| `hmms/osmo_refdb.hmm` (no `hmmpress` indices needed) | `annotate`'s default `--method hmm`/`both`; `profile`'s cascade (on by default) |
 | `osmo_refdb.profile_cascade.tsv` | `profile`'s cascade (on by default) |
 | `osmo_refdb.diamond_cutoffs.tsv` | `annotate --method diamond`/`both` (auto-applied if present) |
 | `osmo_refdb.profile_excluded_families.txt` | `profile` (auto-applied if present) |
