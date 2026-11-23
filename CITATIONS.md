@@ -1,9 +1,15 @@
 # Citations
 
 osmotool runs the tools below and follows the methods listed after them. If you
-publish results produced with osmotool, please cite the tools your run used,
-together with the DOI of the osmo_refdb release you ran it with (see the
-README's [Reference database](README.md#reference-database) section).
+publish results produced with osmotool, please cite:
+
+- osmotool itself, by the Zenodo DOI of the version you ran. For v0.10.1 that
+  is [10.5281/zenodo.24442151](https://doi.org/10.5281/zenodo.24442151);
+  [10.5281/zenodo.21787565](https://doi.org/10.5281/zenodo.21787565) lists
+  every version.
+- the osmo_refdb release you ran it with, by its DOI (see the README's
+  [Reference database](README.md#reference-database) section).
+- the tools your run used, below.
 
 ## Tools
 

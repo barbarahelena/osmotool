@@ -1,5 +1,7 @@
 # osmotool
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21787565.svg)](https://doi.org/10.5281/zenodo.21787565)
+
 Screen osmoadaptation genes in metagenomic datasets using [DIAMOND](https://github.com/bbuchfink/diamond) and [HMMER](http://hmmer.org/).
 
 ## Overview
@@ -923,6 +925,13 @@ pytest
 
 osmotool is released under the MIT license (see [LICENSE](LICENSE)). The
 osmo_refdb releases it downloads carry their own terms; see the release's
-README. [CITATIONS.md](CITATIONS.md) lists the tools and methods osmotool
-builds on; cite the ones your run used, together with the DOI of the
-osmo_refdb release you used.
+README.
+
+If you use osmotool, cite the DOI of the version you ran. Every release is
+archived on Zenodo with its own DOI, for example v0.10.1:
+[10.5281/zenodo.24442151](https://doi.org/10.5281/zenodo.24442151). The DOI
+[10.5281/zenodo.21787565](https://doi.org/10.5281/zenodo.21787565) covers all
+versions and always resolves to the latest one; `osmotool --version` tells
+you which version you ran. Also cite the DOI of the osmo_refdb release you
+used. [CITATIONS.md](CITATIONS.md) lists the tools and methods osmotool
+builds on: cite the ones your run used.
