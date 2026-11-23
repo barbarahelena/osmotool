@@ -182,7 +182,7 @@ def run_profile(
     abundance independently, same as before Task 2 added the systems
     layer -- a system-level claim (opuA/opuB/opuC/mrp/ect/ots/trk/ktr)
     requires `annotate` mode (or a dedicated assembly+binning step) on the
-    same samples. See this project's README for the same note.
+    same samples. See docs/profile.md for the same note.
     """
     check_tool("diamond")
     if markers is not None and train_refs is None:

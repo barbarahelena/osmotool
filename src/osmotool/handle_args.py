@@ -196,7 +196,7 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
     )
     # A catalog built locally with `osmotool build-catalog` for DATABASE's
     # HMMs, used instead of the one DATABASE ships. Kept out of the main help
-    # (documented in the README): a shipped catalog is versioned with its
+    # (documented in docs/profile.md): a shipped catalog is versioned with its
     # release, a local one is the user's to keep in step.
     cat.add_argument("--catalog_dir", metavar="DIR", default=None, help=argparse.SUPPRESS)
     cat.add_argument(
@@ -227,8 +227,7 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
     tune.add_argument(
         "--catalog_min_aligned", type=int, default=45, metavar="BP",
         help="Minimum aligned read bases for a read to be settled by the catalog "
-             "(soft-clipped ends, e.g. a read running off a gene end, don't count). "
-             "0.97 / 45 are Cayman's defaults.",
+             "(soft-clipped ends, e.g. a read running off a gene end, don't count).",
     )
 
     cascade = p.add_argument_group("translated search: DIAMOND+HMM cascade")
@@ -371,8 +370,8 @@ def _add_build_catalog_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--aligner_bin", default=None, metavar="EXE",
                    help="Executable for --aligner if not the default name on PATH.")
     p.add_argument("--index", default="all", choices=["all", "hits", "neighbours", "none"],
-                   help="all: index every catalog gene, so reads map competitively "
-                        "(as Cayman). hits: index only genes with an HMM hit -- a much "
+                   help="all: index every catalog gene, so reads map competitively. "
+                        "hits: index only genes with an HMM hit -- a much "
                         "smaller index, but reads from other genes can only fall back. "
                         "neighbours: the hit genes plus every gene without a hit that a "
                         "read window aligns to a hit gene at >= 90%% over >= 45 bp, so "
@@ -409,7 +408,7 @@ def _add_index_catalog_parser(sub: argparse._SubParsersAction) -> None:
 def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser(
         "annotate",
-        help="Annotate an assembly against osmodiamond (Prodigal + diamond blastp).",
+        help="Annotate an assembly: Prodigal, then hmmsearch (default) or diamond blastp.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
@@ -460,11 +459,11 @@ def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:
         "--systems_config", default=None, metavar="TSV",
         help="Optional TSV overriding each system's max_distance_genes/"
              "max_distance_bp proximity window (columns: system, "
-             "max_distance_genes, max_distance_bp). The shipped defaults "
-             "(8 genes / 8000bp) are UNCALIBRATED starting points from the "
-             "extension spec -- see systems.py / README before trusting "
-             "them in production. Mandatory/accessory/fusion membership is "
-             "not overridable this way.",
+             "max_distance_genes, max_distance_bp). The defaults are 3 genes / "
+             "2000 bp between consecutive subunits (30 / 35000 for "
+             "galE_murB_mazG), checked against operons in six species -- "
+             "see docs/annotate.md. Mandatory/accessory/fusion membership "
+             "is not overridable this way.",
     )
 
     nacl = p.add_argument_group("NaCl tolerance prediction")
