@@ -28,9 +28,9 @@ RELEASES: dict[str, str] = {
     "v7": "21600046",
     "v8": "21691253",
     "v9": "24154957",
+    "v10": "24442164",
 }
-# v10 joins RELEASES, and becomes LATEST_RELEASE, once its Zenodo record exists.
-LATEST_RELEASE = "v9"
+LATEST_RELEASE = "v10"
 
 # Releases that ship no gene catalog. `profile` needs one, so these serve
 # `annotate` (and reproducing older results) only. Kept downloadable rather
@@ -159,8 +159,9 @@ def _safe_extractall(tar: tarfile.TarFile, dest: Path) -> None:
 
 def _archive_root(tar: tarfile.TarFile) -> str:
     """Name of the single top-level directory every member of *tar* sits
-    under. Releases up to v8 unpack to ``<release>/`` (``v8/``); v9 unpacks
-    to ``osmo_refdb_v9/``, so the caller renames whatever this returns."""
+    under. Releases up to v8 unpack to ``<release>/`` (``v8/``); v9 and v10
+    unpack to ``osmo_refdb_<release>/``, so the caller renames whatever this
+    returns."""
     roots = set()
     for member in tar.getmembers():
         parts = [p for p in Path(member.name).parts if p not in (".", "")]

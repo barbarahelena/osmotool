@@ -428,8 +428,11 @@ def predict_from_prefix(model: NaclModel, prefix: str | Path,
 
 
 def annotate_method_and_release(prefix: str | Path) -> tuple[str | None, str | None]:
-    """(method, release dir name) from <prefix>.aln_stats.tsv, if present.
-    The release name is the directory above hmms/ or holding osmo_refdb.dmnd."""
+    """(method, release) from <prefix>.aln_stats.tsv, if present. The release
+    directory is the one above hmms/ or holding osmo_refdb.dmnd; its name is
+    PROVENANCE.json's ``release`` when the directory is still there (a
+    hand-unpacked release is called osmo_refdb_v10/, not v10/), else the
+    directory's name."""
     path = Path(f"{prefix}.aln_stats.tsv")
     if not path.exists():
         return None, None
@@ -444,5 +447,10 @@ def annotate_method_and_release(prefix: str | Path) -> tuple[str | None, str | N
     release = None
     if db:
         p = Path(db)
-        release = p.parent.parent.name if p.parent.name == "hmms" else p.parent.name
+        root = p.parent.parent if p.parent.name == "hmms" else p.parent
+        if root.is_dir():
+            from osmotool.utils import release_name
+            release = release_name(root)
+        else:
+            release = root.name
     return method, release

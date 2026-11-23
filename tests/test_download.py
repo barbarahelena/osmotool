@@ -35,6 +35,11 @@ class TestResolveRelease:
         assert _resolve_release("latest") == LATEST_RELEASE
         assert LATEST_RELEASE in RELEASES
 
+    def test_latest_ships_a_catalog(self):
+        from osmotool.download import ANNOTATE_ONLY_RELEASES
+        assert LATEST_RELEASE == "v10" and RELEASES["v10"] == "24442164"
+        assert LATEST_RELEASE not in ANNOTATE_ONLY_RELEASES
+
     def test_known_release_passthrough(self):
         assert _resolve_release("v5") == "v5"
 

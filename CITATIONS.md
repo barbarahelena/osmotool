@@ -89,11 +89,13 @@ README's [Reference database](README.md#reference-database) section).
 ## Methods osmotool follows
 
 - **Cayman**: catalog-based read assignment, its competitive whole-catalog
-  mapping and its 97% identity / 45 bp defaults (`profile`'s catalog step)
+  mapping and its 97% identity / 45 bp defaults (`profile`'s catalog step).
+  The `gmgc_gut` gene set is also Cayman's prevalence-filtered GMGC catalog
+  ([Zenodo 10473258](https://zenodo.org/records/10473258)).
 
   > Ducarmon QR, Karcher N, Giri S, et al. Cayman enables large-scale
   > analysis of gut microbiome carbohydrate-active enzyme repertoires.
-  > *Nat Microbiol*. 2026;11.
+  > *Nat Microbiol*. 2026;11:1739–1753.
   > doi:[10.1038/s41564-026-02318-2](https://doi.org/10.1038/s41564-026-02318-2)
 
 - **MicrobeCensus**: copies-per-genome normalisation against universal
@@ -114,12 +116,15 @@ README's [Reference database](README.md#reference-database) section).
 
 ## Reference data
 
-osmotool's reference data come from an osmo_refdb release: cite that
-release's Zenodo DOI. osmo_refdb is built from UniProt sequences and, from v10
-on, ships a gene catalog derived from the Global Microbial Gene Catalog; see
-the release's own README for how to cite those sources. For the `gmgc_gut`
-catalog:
+osmotool's reference data come from an osmo_refdb release (CC BY 4.0 from
+v10 on): cite that release's Zenodo DOI. Its README lists the sources to
+credit: UniProt for the reference sequences, and the Global Microbial Gene
+Catalog and Cayman (above) for the genes in `catalogs/`:
 
 > Coelho LP, Alves R, del Río ÁR, et al. Towards the biogeography of
 > prokaryotic genes. *Nature*. 2022;601:252–256.
 > doi:[10.1038/s41586-021-04233-4](https://doi.org/10.1038/s41586-021-04233-4)
+
+> The UniProt Consortium. UniProt: the Universal Protein Knowledgebase in 2025.
+> *Nucleic Acids Res*. 2025;53(D1):D609–D617.
+> doi:[10.1093/nar/gkae1010](https://doi.org/10.1093/nar/gkae1010)
