@@ -24,7 +24,7 @@ only kdpA exists -- and guessed the wrong Mrp fusion pair, mrpA/mrpD instead
 of the actually-confirmed mrpA/mrpB).
 
 `profile` (read) mode deliberately gets none of this -- see run_profile's
-docstring in runners.py and this project's README for why (no contig-level
+docstring in runners.py and docs/profile.md for why (no contig-level
 coordinates at typical short-read lengths, so proximity/colocalization simply
 isn't checkable there).
 
@@ -127,8 +127,8 @@ class SystemDef:
         genes / 2000bp, see this module's docstring for the evidence), but
         `galE_murB_mazG` is a different KIND of claim (a wider genomic
         neighborhood, not one transcriptional unit -- see its own def
-        below) and is calibrated on its own, much looser scale. See this
-        project's README, and --systems_config for overriding a system's
+        below) and is calibrated on its own, much looser scale. See
+        docs/annotate.md, and --systems_config for overriding a system's
         distances without touching code.
     require_strand_consistency:
         Whether _strand_consistent (see detect_systems) is enforced for
