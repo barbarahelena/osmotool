@@ -150,10 +150,13 @@ def write_unit_counts(
     says nothing about whether those genes are there.
 
     with_sources (``profile`` with a catalog) adds catalog_count,
-    catalog_ambiguous and translated_count after RPM. An excluded unit then
-    has status catalog_only: its catalog counts are reported (full-length
-    annotation, so reliable, but only for strains in the catalog), raw_count
-    stays NA.
+    catalog_ambiguous and translated_count after RPM. report_level describes
+    translated search; the manifest's catalog_reported describes the
+    catalog's reads. A none unit with catalog_reported yes has status
+    catalog_only: its catalog counts are reported (only for strains in the
+    catalog), raw_count stays NA. With no, or a manifest that doesn't say, it
+    stays excluded with NA throughout. A gene or group unit with no has
+    catalog counts 0: its reads went to translated search.
     """
     out_path = Path(str(out_prefix) + ".unit_counts.tsv")
     with open(out_path, "w") as fh:

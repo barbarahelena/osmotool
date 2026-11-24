@@ -141,9 +141,13 @@ def _add_profile_parser(sub: argparse._SubParsersAction) -> None:
              "the report levels, <out_prefix>.unit_counts.tsv is written "
              "next to gene_counts.tsv: one row per reporting unit (a gene, "
              "or a paralog group short reads can't split), with units not "
-             "reliable at any level listed as excluded. The levels were "
-             "decided on translated-search calibration reads, so they "
-             "describe step 2; catalog-settled reads are full-length calls.",
+             "reliable at any level listed as excluded. Its report_level "
+             "describes translated search (step 2), and its "
+             "catalog_reported column (osmo_refdb v11 and later) says "
+             "whether the reads the catalog settles for a unit can be "
+             "reported. Where it says no, those reads go to translated "
+             "search instead; a none unit gets catalog counts only where "
+             "it says yes.",
     )
 
     reads = p.add_argument_group("reads (paired-end or single-end)")
