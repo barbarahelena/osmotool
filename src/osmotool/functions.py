@@ -726,16 +726,25 @@ def load_cascade_config(path: str | Path) -> dict[str, float]:
 # ---------------------------------------------------------------------------
 
 REPORT_LEVELS = ("gene", "group", "none")
+CATALOG_REPORTED = {"yes": "yes", "no": "no", "NA": None}
 
 
 @dataclass(frozen=True)
 class ReportUnit:
     """One row of a release's report-level manifest: a family reported on
     its own (gene), a paralog group summed into one row (group), or a
-    family excluded from reporting (none)."""
+    family excluded from reporting (none).
+
+    catalog_reported: whether the reads the gene catalog settles for this
+    unit can be reported, decided by osmo_refdb on the calibration reads'
+    catalog calls alone ("yes" or "no"); None when the manifest doesn't say
+    (no catalog_reported column, as in v10, or NA: built without a catalog
+    run). report_level describes translated search; this describes the
+    catalog's reads."""
     unit: str
     report_level: str
     members: tuple[str, ...]
+    catalog_reported: str | None = None
 
 
 def load_report_levels(path: str | Path) -> list[ReportUnit]:
@@ -747,8 +756,9 @@ def load_report_levels(path: str | Path) -> list[ReportUnit]:
     reliable at any level and are listed as excluded instead of counted.
 
     Lines starting with '#' (how the levels were decided) are skipped. Only
-    unit, report_level and members (comma-separated families) are read;
-    the calibration numbers next to them are there for people checking a
+    unit, report_level, members (comma-separated families) and, when the
+    release has it (v11 and later), catalog_reported are read; the
+    calibration numbers next to them are there for people checking a
     choice. A family may belong to one unit only.
 
     Returns the units in file order.
@@ -761,11 +771,19 @@ def load_report_levels(path: str | Path) -> list[ReportUnit]:
         missing = {"unit", "report_level", "members"} - set(reader.fieldnames or [])
         if missing:
             raise ValueError(f"{path}: missing column(s) {', '.join(sorted(missing))}")
+        has_catalog = "catalog_reported" in (reader.fieldnames or [])
         for row in reader:
             level = row["report_level"]
             if level not in REPORT_LEVELS:
                 raise ValueError(f"{path}: unit {row['unit']}: report_level {level!r} "
                                  f"is not one of {', '.join(REPORT_LEVELS)}")
+            catalog_reported = None
+            if has_catalog:
+                value = row["catalog_reported"]
+                if value not in CATALOG_REPORTED:
+                    raise ValueError(f"{path}: unit {row['unit']}: catalog_reported {value!r} "
+                                     f"is not one of {', '.join(CATALOG_REPORTED)}")
+                catalog_reported = CATALOG_REPORTED[value]
             members = tuple(m for m in row["members"].split(",") if m)
             if not members:
                 raise ValueError(f"{path}: unit {row['unit']} has no members")
@@ -773,8 +791,16 @@ def load_report_levels(path: str | Path) -> list[ReportUnit]:
                 if m in owner:
                     raise ValueError(f"{path}: {m} is in both {owner[m]} and {row['unit']}")
                 owner[m] = row["unit"]
-            units.append(ReportUnit(row["unit"], level, members))
+            units.append(ReportUnit(row["unit"], level, members, catalog_reported))
     return units
+
+
+def catalog_fallthrough(units) -> frozenset[str]:
+    """The families whose catalog calls fall through to translated search:
+    the members of every unit with catalog_reported "no". The catalog then
+    doesn't settle reads it would call (or split) as one of them, so their
+    count comes from translated search, whose level was decided separately."""
+    return frozenset(m for u in units if u.catalog_reported == "no" for m in u.members)
 
 
 # ---------------------------------------------------------------------------

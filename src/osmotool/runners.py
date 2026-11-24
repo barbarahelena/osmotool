@@ -28,6 +28,7 @@ from osmotool.functions import (
     load_diamond_cutoffs,
     load_cascade_config,
     load_report_levels,
+    catalog_fallthrough,
     load_excluded_families,
     extract_fastq_subset,
     strip_orf_suffix,
@@ -208,6 +209,8 @@ def run_profile(
     # t_reads* are what the translated search sees: all reads, or only the
     # ones the catalog did not settle.
     t_reads1, t_reads2, t_singles = reads1, reads2, singles
+    units = load_report_levels(report_levels) if report_levels is not None else None
+    fallthrough = _catalog_fallthrough(units, translated_fallback) if catalog is not None else frozenset()
     cat = None
     fallback_files: list[Path] = []
     if catalog is not None:
@@ -216,6 +219,7 @@ def run_profile(
             catalog, reads1=reads1, reads2=reads2, singles=singles, threads=threads,
             min_identity=catalog_min_identity, min_aligned=catalog_min_aligned,
             hits_out=Path(str(out_prefix) + ".catalog_hits.tsv") if keep_aln else None,
+            fallthrough=fallthrough,
         )
         if translated_fallback:
             if paired:
@@ -314,9 +318,8 @@ def run_profile(
         count_sources=sources,
     )
     unit_stats = {}
-    if report_levels is not None:
-        unit_rows = aggregate_report_units(load_report_levels(report_levels), counts, rpm, copies,
-                                           sources=sources)
+    if units is not None:
+        unit_rows = aggregate_report_units(units, counts, rpm, copies, sources=sources)
         write_unit_counts(
             out_prefix, unit_rows,
             total_fragments=total_fragments, filtered_fragments=filtered_fragments,
@@ -341,7 +344,7 @@ def run_profile(
         evalue=evalue,
         note_systems=PROFILE_SYSTEMS_NOTE,
         extra={**(marker_stats or {}), **unit_stats, **_catalog_stats(catalog, cat,
-               translated_fallback, settled_fraction)} or None,
+               translated_fallback, settled_fraction, units)} or None,
     )
     stats_path = write_aln_stats(out_prefix, stats)
 
@@ -391,10 +394,38 @@ def _warn_if_catalog_unsettled(catalog: Catalog, fraction: float | None,
         catalog.name, 100 * fraction, 100 * CATALOG_MIN_SETTLED)
 
 
+def _catalog_fallthrough(units, translated_fallback: bool) -> frozenset[str]:
+    """The families whose catalog calls fall through to translated search
+    (functions.catalog_fallthrough), with a log line on what the manifest
+    says about the catalog's reads."""
+    if units is None:
+        return frozenset()
+    if all(u.catalog_reported is None for u in units):
+        none_units = [u.unit for u in units if u.report_level == "none"]
+        if none_units:
+            log.warning(
+                "The release's report levels don't say whether its gene catalog's counts can be "
+                "reported (no catalog_reported column; osmo_refdb v11 and later have it). Units at "
+                "report_level none are therefore excluded, without catalog counts: %s.",
+                ", ".join(none_units))
+        return frozenset()
+    fallthrough = catalog_fallthrough(units)
+    if fallthrough:
+        log.info("The release doesn't report the catalog's calls for %s; %s",
+                 ", ".join(u.unit for u in units if u.catalog_reported == "no"),
+                 "their reads go to translated search" if translated_fallback
+                 else "with --catalog_only their reads are not counted")
+    return fallthrough
+
+
 def _catalog_stats(catalog: Catalog | None, cat, translated_fallback: bool,
-                   settled_fraction: float | None = None) -> dict:
+                   settled_fraction: float | None = None, units=None) -> dict:
     if catalog is None:
         return {"catalog": "none (--translated_only)"}
+    if units is None or all(u.catalog_reported is None for u in units):
+        not_reported = "not in manifest"
+    else:
+        not_reported = ",".join(u.unit for u in units if u.catalog_reported == "no") or "none"
     return {
         "catalog": catalog.name,
         "catalog_release": catalog.release or "unknown",
@@ -408,6 +439,8 @@ def _catalog_stats(catalog: Catalog | None, cat, translated_fallback: bool,
         "catalog_dropped_by_reason": ",".join(f"{k}:{v}" for k, v in
                                               sorted(cat.dropped_by_reason.items())) or "none",
         "catalog_reads_fallback": cat.n_fallback,
+        "catalog_reads_fallthrough": cat.n_fallthrough,
+        "catalog_units_not_reported": not_reported,
         "catalog_settled_fraction": ("NA" if settled_fraction is None
                                      else f"{settled_fraction:.4f}"),
         "translated_fallback": "yes" if translated_fallback else "no",

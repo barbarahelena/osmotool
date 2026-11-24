@@ -55,6 +55,7 @@ The release ships a gene catalog under `catalogs/<name>/`. v10 ships `gmgc_gut`:
 - If that gene belongs to a panel family, the read counts for that family. A gene belongs to a family when its full-length HMM score reaches the family's gathering cutoff, exactly as in `annotate --method hmm`.
 - If the gene is background, a homolog below the cutoff, or a decoy, the read is settled but dropped. The index includes these competitors, so their reads land on their own gene instead of being forced onto a family.
 - A read with valid placements on different families is ambiguous: it is split equally over them in `catalog_ambiguous` and kept out of `raw_count`.
+- A read the catalog would call as a unit whose catalog calls the release doesn't report (`catalog_reported` `no`, see [Report units](#report-units)) is not settled either.
 - Every other read goes on to step 2.
 
 ### Step 2: translated search
@@ -63,13 +64,28 @@ Reads the catalog can't settle are searched with `diamond blastx` against the re
 
 ### Report units
 
-Some families are close paralogs that a short read can't tell apart (e.g. the OpuA/OpuB/OpuC permeases), and some are not reliable on short reads at all. The release decides, on its calibration reads, at which level each can be reported, in `osmo_refdb.profile_report_levels.tsv`. v10 has:
+Some families are close paralogs that a short read can't tell apart (e.g. the OpuA/OpuB/OpuC permeases), and some are not reliable on short reads at all. The release decides, on its calibration reads, how each can be reported, in `osmo_refdb.profile_report_levels.tsv`. It makes two decisions per unit.
 
-- `gene`: 26 families reported on their own;
-- `group`: 1 paralog group reported as the sum of its members (opuAB + opuBB + opuCB);
-- `none`: 15 families not reported. Either they fall below F1 0.5, or they are annotate-only by scope (otsA, murB, mrpC, trkH, ktrB, ktrD).
+`report_level` is decided on translated search:
 
-The results are in `unit_counts.tsv`. These levels were decided on translated search. Catalog-settled reads are full-length calls, so a `none` unit still gets its catalog counts, with status `catalog_only`.
+- `gene`: the family is reported on its own;
+- `group`: a paralog group is reported as the sum of its members (e.g. opuAB + opuBB + opuCB);
+- `none`: not reported. The `reason` column says why: below the F1 threshold, too few calibration sequences, not stable under the bootstrap, or annotate-only by scope.
+
+`catalog_reported` is decided on the catalog's calls alone. It says whether the reads the catalog settles for a unit can be reported. Paralogs that confuse the HMMs at full length (e.g. the opu substrate-binding proteins) get `no`.
+
+How `profile` uses the two:
+
+| `report_level` | `catalog_reported` | What happens |
+|---|---|---|
+| `gene`, `group` | `yes` | Reported; catalog and translated reads together |
+| `gene`, `group` | `no` | Reported; the catalog doesn't settle its reads, so they all go to translated search |
+| `none` | `yes` | Status `catalog_only`: its catalog counts are reported, `raw_count` stays `NA` |
+| `none` | `no` | Excluded; its catalog reads go to translated search, where it isn't reported |
+
+A release whose manifest has no `catalog_reported` column doesn't say whether its catalog counts can be reported. Its `none` units are then excluded without catalog counts, and `profile` warns.
+
+The results are in `unit_counts.tsv`.
 
 ### Copies per genome
 
@@ -134,7 +150,7 @@ The catalog source columns and `copies_per_genome` follow as in `gene_counts.tsv
 
 - `group` sums its members' counts. Each read counts for one family only, so this is the number of reads called as any member.
 - `excluded` units get `NA`, never 0. Don't read them as "gene absent": the table says nothing about them.
-- `catalog_only`: a `none` unit with catalog counts. These are reported, and `raw_count` stays `NA`.
+- `catalog_only`: a `none` unit whose catalog reads the release reports (`catalog_reported` `yes`). Its catalog counts are given, and `raw_count` stays `NA`.
 - `not_in_manifest`: a label with reads but in no unit (e.g. the fused reference `mrpA_mrpB_fused`), listed so no read disappears silently.
 
 Every unit gets a row, zeros included.
@@ -156,6 +172,8 @@ Two columns, `metric` and `value`. Counts are in fragments, except the `catalog_
 | `catalog_reads_called`, `catalog_reads_ambiguous` | Reads the catalog settled on one family, or on several |
 | `catalog_reads_dropped`, `catalog_dropped_by_reason` | Reads settled on a gene that isn't counted (background, homolog, decoy) |
 | `catalog_reads_fallback` | Reads that went on to translated search |
+| `catalog_reads_fallthrough` | Of those, reads the catalog called as a unit with `catalog_reported` `no` |
+| `catalog_units_not_reported` | Those units, or `not in manifest` when the release doesn't say |
 | `catalog_settled_fraction` | Share of assigned fragments the catalog settled (see below) |
 | `translated_fallback` | `yes`, or `no` with `--catalog_only` |
 | `note_systems` | Reminder that multi-subunit systems can't be checked from reads |
@@ -179,7 +197,7 @@ The options most runs touch. `osmotool profile --help` lists them all.
 | `--tmpdir` | `$TMPDIR`, `$SCRATCH`, `/tmp` | Temporary files |
 | `--total_fragments` | counted | Read pairs (R1's read count), or reads for single-end; skips counting. `--total_reads` takes R1 + R2 instead |
 | `--habitat` | the release's only catalog | Which of `catalogs/<name>/` to use, once a release ships several |
-| `--catalog_only` | off | Count catalog-settled reads only; skip translated search. Only for samples the catalog covers well |
+| `--catalog_only` | off | Count catalog-settled reads only; skip translated search. Only for samples the catalog covers well. Units with `catalog_reported` `no` then get no reads at all |
 | `--translated_only` | off | Skip the catalog, for benchmarking; also runs on releases without one |
 | `--no_cascade` | off | DIAMOND only in step 2, e.g. without `orfm`/`hmmsearch` |
 | `--no_markers` | off | Skip copies-per-genome |
@@ -212,5 +230,5 @@ A full index built once with `osmotool index-catalog` can be reused across relea
 
 - **The catalog is human gut.** Above 97% identity it only sees strains whose genes are in GMGC. For environmental or halophile samples most reads fall back to translated search, and `profile` warns when the catalog settled less than half of the assigned fragments.
 - **Catalog calls carry the full-length annotation's errors.** Paralogs the HMMs confuse at full length (e.g. some opu permeases) and genes just below a gathering cutoff are not fixed by the catalog.
-- **The report levels describe translated search.** A unit at `none` may still be measurable through the catalog for catalogued strains.
+- **Catalog counts are only for catalogued strains.** A `catalog_only` unit is measured through the catalog alone, so it is seen only in strains whose genes are in the catalog.
 - **No systems from reads.** Reads carry no contig positions, so multi-subunit systems can't be checked for co-location. That needs `annotate` on assemblies of the same samples.

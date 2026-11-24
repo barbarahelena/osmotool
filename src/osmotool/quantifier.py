@@ -252,10 +252,14 @@ def aggregate_report_units(
 
     sources (``profile`` with a catalog): {family: (catalog_count,
       catalog_ambiguous, translated_count)}; rows get all three, summed over
-      members. An excluded unit then becomes status "catalog_only": the
-      catalog's full-length calls are reliable at gene level, so its catalog
+      members. A none unit whose catalog reads the release reports
+      (catalog_reported "yes") becomes status "catalog_only": its catalog
       counts are given, while raw_count, rpm and translated_count stay None
-      (reads outside the catalog could not be assigned).
+      (reads outside the catalog could not be assigned). With "no", or when
+      the manifest doesn't say (None), it stays "excluded" and its catalog
+      counts are None too. A gene or group unit with "no" needs nothing
+      here: its reads fell through to translated search (catalog.settle_records),
+      so its catalog counts are 0 and its count is translated search's.
 
     Rows: unit, report_level, members (tuple), status, raw_count, rpm,
     copies_per_genome, catalog_count, catalog_ambiguous, translated_count.
@@ -269,10 +273,12 @@ def aggregate_report_units(
                     if sources is not None else None)
         cat_sum, amb_sum = src(0), src(1)
         if u.report_level == "none":
+            catalog_only = sources is not None and getattr(u, "catalog_reported", None) == "yes"
             rows.append({"unit": u.unit, "report_level": "none", "members": u.members,
-                         "status": "excluded" if sources is None else "catalog_only",
+                         "status": "catalog_only" if catalog_only else "excluded",
                          "raw_count": None, "rpm": None, "copies_per_genome": None,
-                         "catalog_count": cat_sum, "catalog_ambiguous": amb_sum,
+                         "catalog_count": cat_sum if catalog_only else None,
+                         "catalog_ambiguous": amb_sum if catalog_only else None,
                          "translated_count": None})
             continue
         missing = [m for m in u.members if m not in counts]

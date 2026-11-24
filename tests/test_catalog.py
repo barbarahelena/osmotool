@@ -18,7 +18,7 @@ from osmotool.catalog import (
     neighbour_windows, norm_read_id, parse_domtblout, read_ga_cutoffs, select_neighbours,
     settle_records, translate, write_fallback_fastq,
 )
-from osmotool.functions import ReportUnit
+from osmotool.functions import ReportUnit, catalog_fallthrough, load_report_levels
 from osmotool.output import write_gene_counts, write_unit_counts
 from osmotool.quantifier import aggregate_report_units
 from osmotool.runners import _catalog_stats, catalog_settled_fraction, _warn_if_catalog_unsettled
@@ -224,11 +224,16 @@ UNITS = [ReportUnit("ectA", "gene", ("ectA",)),
          ReportUnit("opuAC", "none", ("opuAC",))]
 
 
+def _with_catalog(units, answers: dict[str, str | None]):
+    return [dataclasses.replace(u, catalog_reported=answers.get(u.unit)) for u in units]
+
+
 def test_units_with_sources():
     counts = {"ectA": 3.0, "opuAB": 1.0, "opuBB": 2.0, "opuAC": 4.0}
     sources = {"ectA": (2.0, 0.5, 1.0), "opuAB": (1.0, 0.0, 0.0), "opuBB": (0.5, 0.25, 1.5),
                "opuAC": (1.5, 0.0, 2.5)}
-    rows = {r["unit"]: r for r in aggregate_report_units(UNITS, counts, counts, sources=sources)}
+    units = _with_catalog(UNITS, {"ectA": "yes", "opu_permease": "yes", "opuAC": "yes"})
+    rows = {r["unit"]: r for r in aggregate_report_units(units, counts, counts, sources=sources)}
     assert (rows["ectA"]["catalog_count"], rows["ectA"]["catalog_ambiguous"],
             rows["ectA"]["translated_count"]) == (2.0, 0.5, 1.0)
     assert (rows["opu_permease"]["catalog_count"], rows["opu_permease"]["catalog_ambiguous"],
@@ -238,15 +243,56 @@ def test_units_with_sources():
     assert ac["raw_count"] is None and ac["translated_count"] is None
 
 
+@pytest.mark.parametrize("answer", ["no", None])
+def test_none_unit_without_reported_catalog_is_excluded(answer):
+    # catalog_reported no, or a manifest that doesn't say (v10): no catalog counts
+    sources = {"opuAC": (1.5, 0.5, 2.5)}
+    units = _with_catalog(UNITS, {"opuAC": answer})
+    ac = {r["unit"]: r for r in aggregate_report_units(units, {"opuAC": 4.0}, {"opuAC": 4.0},
+                                                       sources=sources)}["opuAC"]
+    assert ac["status"] == "excluded"
+    assert all(ac[k] is None for k in ("raw_count", "catalog_count", "catalog_ambiguous",
+                                       "translated_count"))
+
+
 def test_unit_counts_file_with_sources(tmp_path: Path):
     counts = {"ectA": 3.0, "opuAC": 4.0}
     sources = {"ectA": (2.0, 0.5, 1.0), "opuAC": (1.5, 0.0, 2.5)}
-    rows = aggregate_report_units(UNITS, counts, counts, sources=sources)
+    units = _with_catalog(UNITS, {"ectA": "yes", "opuAC": "yes"})
+    rows = aggregate_report_units(units, counts, counts, sources=sources)
     lines = write_unit_counts(tmp_path / "s", rows, total_fragments=10, filtered_fragments=5,
                               report_levels="r.tsv", with_sources=True).read_text().splitlines()
     assert lines[3].endswith("RPM\tcatalog_count\tcatalog_ambiguous\ttranslated_count")
     assert lines[4] == "ectA\tgene\tectA\treported\t3.0\t3\t2.0\t0.50\t1.0"
     assert lines[6] == "opuAC\tnone\topuAC\tcatalog_only\tNA\tNA\t1.5\t0.00\tNA"
+
+
+def _manifest(tmp_path: Path, rows: list[str], catalog: bool = True) -> Path:
+    header = "unit\treport_level\tmembers" + ("\tcatalog_reported\tcatalog_reason" if catalog else "")
+    path = tmp_path / "osmo_refdb.profile_report_levels.tsv"
+    path.write_text("# decided on calibration reads\n" + header + "\n" + "\n".join(rows) + "\n")
+    return path
+
+
+def test_load_report_levels_reads_catalog_reported(tmp_path: Path):
+    path = _manifest(tmp_path, ["ectA\tgene\tectA\tyes\tmeets_threshold",
+                                "betL\tgene\tbetL\tno\tbelow_threshold",
+                                "opuAC\tnone\topuAC\tno\tbelow_threshold",
+                                "mrpC\tnone\tmrpC\tyes\tmeets_threshold",
+                                "teaA\tnone\tteaA\tNA\tNA"])
+    units = load_report_levels(path)
+    assert [u.catalog_reported for u in units] == ["yes", "no", "no", "yes", None]
+    assert catalog_fallthrough(units) == {"betL", "opuAC"}
+
+
+def test_load_report_levels_without_catalog_column(tmp_path: Path):
+    units = load_report_levels(_manifest(tmp_path, ["ectA\tgene\tectA"], catalog=False))
+    assert units[0].catalog_reported is None and catalog_fallthrough(units) == frozenset()
+
+
+def test_load_report_levels_rejects_bad_catalog_reported(tmp_path: Path):
+    with pytest.raises(ValueError, match="catalog_reported 'maybe'"):
+        load_report_levels(_manifest(tmp_path, ["ectA\tgene\tectA\tmaybe\tx"]))
 
 
 def test_gene_counts_with_sources(tmp_path: Path):
@@ -267,9 +313,33 @@ def _line(**kw) -> str:
     return "\t".join(_sam(**kw)) + "\n"
 
 
-def _settle(lines, paired=False):
+def _settle(lines, paired=False, fallthrough=frozenset()):
     return settle_records(["@HD\tVN:1.6\n", *lines], _catalog(), paired=paired,
-                          min_identity=0.97, min_aligned=45)
+                          min_identity=0.97, min_aligned=45, fallthrough=fallthrough)
+
+
+def test_settle_fallthrough_family_goes_to_translated_search():
+    import io
+    hits = io.StringIO()
+    res = settle_records(["@HD\tVN:1.6\n", _line(qname="a"), _line(qname="b", rname="geneB")],
+                         _catalog(), paired=False, min_identity=0.97, min_aligned=45,
+                         fallthrough=frozenset({"ectB"}), hits_out=hits)
+    assert res.counts == {"ectA": 1.0}
+    assert res.n_fallback == 1 and res.n_fallthrough == 1 and res.n_called == 1
+    assert res.accepted[0] == {"a"}                     # b is copied to the fallback FASTQ
+    rows = hits.getvalue().splitlines()[1:]
+    assert [r.split("\t")[0] for r in rows] == ["a"]    # not settled, so not in catalog_hits
+
+
+def test_settle_ambiguous_with_a_fallthrough_family_falls_through():
+    res = _settle([_line(xa=[("geneB", 10, "150M", 0)])], fallthrough=frozenset({"ectB"}))
+    assert res.ambiguous == {} and res.n_ambiguous == 0
+    assert res.n_fallthrough == 1 and res.accepted[0] == set()
+
+
+def test_settle_drops_are_not_affected_by_fallthrough():
+    res = _settle([_line(rname="geneH")], fallthrough=frozenset({"ectA"}))
+    assert res.n_dropped == 1 and res.n_fallthrough == 0
 
 
 def test_alternative_placements_parses_xa():
@@ -409,6 +479,20 @@ def test_catalog_stats_identify_the_catalog(tmp_path: Path):
     assert stats["catalog_settled_fraction"] == "0.2500"
     assert _catalog_stats(catalog, res, True, None)["catalog_settled_fraction"] == "NA"
     assert _catalog_stats(None, None, True) == {"catalog": "none (--translated_only)"}
+    assert stats["catalog_reads_fallthrough"] == 0
+    assert stats["catalog_units_not_reported"] == "not in manifest"
+    units = _with_catalog(UNITS, {"ectA": "yes", "opu_permease": "no", "opuAC": "no"})
+    assert _catalog_stats(catalog, res, True, None, units)["catalog_units_not_reported"] \
+        == "opu_permease,opuAC"
+
+
+def test_catalog_fallthrough_logs_a_manifest_without_the_column(caplog):
+    from osmotool.runners import _catalog_fallthrough
+    with caplog.at_level("WARNING"):
+        assert _catalog_fallthrough(UNITS, True) == frozenset()
+    assert "excluded, without catalog counts: opuAC" in caplog.text
+    units = _with_catalog(UNITS, {"ectA": "yes", "opu_permease": "no", "opuAC": "yes"})
+    assert _catalog_fallthrough(units, True) == {"opuAB", "opuBB"}
 
 
 def test_catalog_settled_fraction():

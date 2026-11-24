@@ -715,13 +715,14 @@ class CatalogResult:
     n_called: int = 0
     n_ambiguous: int = 0
     n_dropped: int = 0
-    n_fallback: int = 0
+    n_fallback: int = 0                       # reads left to translated search, fall-through included
+    n_fallthrough: int = 0                    # of those: called as a family whose catalog calls are not reported
     dropped_by_reason: dict[str, int] = field(default_factory=dict)
 
 
 def settle_records(
     sam_lines, catalog: Catalog, *, paired: bool, min_identity: float, min_aligned: int,
-    hits_out=None,
+    hits_out=None, fallthrough: frozenset[str] = frozenset(),
 ) -> CatalogResult:
     """
     The catalog decision for every read in a SAM stream (primary records;
@@ -738,8 +739,14 @@ def settle_records(
         drop share is discarded. Ambiguous weight is kept out of `counts`, the
         way Cayman reports unique and combined counts separately.
     Paired mates are judged independently and weigh 0.5 each, as count_hits.
+    *fallthrough*: families whose catalog calls the release does not report
+    (catalog_reported "no", functions.catalog_fallthrough). A read called as
+    one of them, or ambiguous with one among its labels, is not settled: it
+    goes to fallback like a read below the thresholds, and is counted in
+    n_fallthrough as well.
     *hits_out*: an open text file; every settled read is written as a TSV row
     (read, mate, gene, decision, label, identity, aligned_bp, n_placements).
+    Fall-through reads are not settled, so they are not written.
     """
     weight = 0.5 if paired else 1.0
     res = CatalogResult(counts={}, lengths_aa={}, accepted={0: set(), 1: set(), 2: set()})
@@ -767,6 +774,10 @@ def settle_records(
             if d != "fallback":
                 placements.append((d, lab))
         labels = sorted({lab if d == "call" else "drop" for d, lab in placements})
+        if fallthrough and not fallthrough.isdisjoint(labels):
+            res.n_fallback += 1
+            res.n_fallthrough += 1
+            continue
         rid = norm_read_id(fields[0])
         res.accepted[mate].add(rid)
         if len(labels) > 1:
@@ -800,6 +811,7 @@ def map_reads(
     min_aligned: int = 45,
     max_alternatives: int = 50,
     hits_out: str | Path | None = None,
+    fallthrough: frozenset[str] = frozenset(),
 ) -> CatalogResult:
     """Map reads to the catalog with its aligner (bwa-mem3 by default) and
     settle them (settle_records). `mem -h max_alternatives` lists up to that
@@ -816,7 +828,7 @@ def map_reads(
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1 << 20)
     try:
         res = settle_records(proc.stdout, catalog, paired=paired, min_identity=min_identity,
-                             min_aligned=min_aligned, hits_out=out_fh)
+                             min_aligned=min_aligned, hits_out=out_fh, fallthrough=fallthrough)
     finally:
         proc.stdout.close()
         rc = proc.wait()
@@ -824,10 +836,11 @@ def map_reads(
             out_fh.close()
     if rc != 0:
         raise RuntimeError(f"{catalog.aligner_bin} mem failed (exit {rc})")
-    log.info("Catalog: %d reads, %d called, %d ambiguous, %d dropped (%s), %d to fallback",
+    log.info("Catalog: %d reads, %d called, %d ambiguous, %d dropped (%s), %d to fallback "
+             "(%d of them called as a family whose catalog calls are not reported)",
              res.n_reads, res.n_called, res.n_ambiguous, res.n_dropped,
              ", ".join(f"{k} {v}" for k, v in sorted(res.dropped_by_reason.items())) or "none",
-             res.n_fallback)
+             res.n_fallback, res.n_fallthrough)
     return res
 
 
