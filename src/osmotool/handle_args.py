@@ -419,10 +419,15 @@ def _add_annotate_parser(sub: argparse._SubParsersAction) -> None:
         "database", metavar="DATABASE",
         help="Path to an unpacked osmo_refdb release directory (e.g. "
              "releases/v10/). osmotool finds osmo_refdb.dmnd, "
-             "hmms/osmo_refdb.hmm, osmo_refdb.diamond_cutoffs.tsv, and "
-             "osmo_refdb.annotate_excluded_families.txt inside it by "
+             "hmms/osmo_refdb.hmm, osmo_refdb.diamond_cutoffs.tsv, "
+             "osmo_refdb.annotate_excluded_families.txt and "
+             "osmo_refdb.annotate_report_levels.tsv inside it by "
              "their fixed names -- no need to point at each file "
-             "separately.",
+             "separately. With the report levels (osmo_refdb v11 and "
+             "later, decided for --method hmm), the HMM output also gets "
+             "<out_prefix>.unit_counts.tsv: one row per reporting unit (a "
+             "gene, or a paralog group the HMMs can't split), with units "
+             "not reliable at any level listed as excluded.",
     )
     p.add_argument(
         "assembly", metavar="ASSEMBLY.FASTA",

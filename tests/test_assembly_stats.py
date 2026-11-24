@@ -220,3 +220,66 @@ class TestAnnotateGeneCountsHeader:
         proteins.write_text(FAKE_PROTEINS)
         counts_path = _run_fake_annotate(tmp_path, proteins=str(proteins))["hmm"][0]
         assert "# genome_bp\t26\n" in counts_path.read_text()
+
+
+# ---------------------------------------------------------------------------
+# run_annotate with the release's annotate report levels (osmo_refdb v11+)
+# ---------------------------------------------------------------------------
+
+def _annotate_levels(tmp_path: Path, method: str = "hmm") -> Path:
+    p = tmp_path / "osmo_refdb.annotate_report_levels.tsv"
+    p.write_text(
+        f"# osmo_refdb annotate report levels, for osmotool annotate --method {method}.\n"
+        "unit\treport_level\tmembers\tparalog_group\tmethod\treason\n"
+        f"ectA\tgene\tectA\t\t{method}\tmeets_threshold\n"
+        f"ect_bc\tgroup\tectB,ectC\tect_bc\t{method}\tmeets_threshold\n"
+        f"kdpA\tnone\tkdpA\t\t{method}\tbelow_threshold\n"
+        f"betA\tgene\tbetA\t\t{method}\tmeets_threshold\n"
+    )
+    return p
+
+
+class TestAnnotateUnitCounts:
+    def test_unit_counts_for_hmm(self, tmp_path: Path):
+        levels = _annotate_levels(tmp_path)
+        counts_path, stats_path, _, _ = _run_fake_annotate(tmp_path, report_levels=str(levels))["hmm"]
+        unit_path = tmp_path / "out.unit_counts.tsv"
+        assert unit_path.read_text().splitlines() == [
+            "# total_proteins\t3",
+            "# proteins_with_hits\t3",
+            f"# report_levels\t{levels}",
+            "unit\treport_level\tmembers\tstatus\traw_count\tCOPIES_PER_KB",
+            "ectA\tgene\tectA\treported\t1.0\t1.11111e+06",
+            "ect_bc\tgroup\tectB,ectC\treported\t1.0\t740741",   # ectC lost its protein to ectB
+            "kdpA\tnone\tkdpA\texcluded\tNA\tNA",                # called, but not reported
+            "betA\tgene\tbetA\treported\t0.0\t0",                # no protein: 0, not NA
+        ]
+        stats = stats_path.read_text()
+        assert "units_reported\t3" in stats and "units_excluded\tkdpA" in stats
+        # gene_counts.tsv is unchanged: kdpA is still there, for the NaCl model
+        assert "kdpA\t1.0\t555556" in counts_path.read_text()
+
+    def test_no_unit_counts_for_another_method(self, tmp_path: Path):
+        _run_fake_annotate(tmp_path, report_levels=str(_annotate_levels(tmp_path, "diamond")))
+        assert not (tmp_path / "out.unit_counts.tsv").exists()
+
+    def test_no_unit_counts_without_levels(self, tmp_path: Path):
+        _run_fake_annotate(tmp_path)
+        assert not (tmp_path / "out.unit_counts.tsv").exists()
+
+    def test_both_writes_unit_counts_for_the_hmm_half_only(self, tmp_path: Path):
+        def fake_blastp(db, proteins, out_file, **_):
+            Path(out_file).write_text("")
+            return Path(out_file)
+        with mock.patch("osmotool.runners.run_diamond_blastp", side_effect=fake_blastp):
+            assembly = _write(tmp_path / "genome.fna", ANNOTATE_ASSEMBLY)
+            proteins = tmp_path / "given.faa"
+            proteins.write_text(FAKE_PROTEINS)
+            with mock.patch("osmotool.runners.check_tool"), \
+                 mock.patch("osmotool.runners.run_hmmsearch",
+                            side_effect=lambda h, p, out, **_: Path(out).write_text(FAKE_TBLOUT)):
+                run_annotate("unused.dmnd", str(assembly), str(tmp_path / "out"), method="both",
+                             hmm_db="unused.hmm", proteins=str(proteins),
+                             report_levels=str(_annotate_levels(tmp_path)))
+        assert (tmp_path / "out.hmm.unit_counts.tsv").exists()
+        assert not (tmp_path / "out.diamond.unit_counts.tsv").exists()
