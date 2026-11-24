@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from osmotool.functions import ReportUnit, load_report_levels
+from osmotool.functions import ReportUnit, load_report_levels, report_levels_method
 from osmotool.output import write_unit_counts
 from osmotool.quantifier import aggregate_report_units
 from osmotool.utils import resolve_refdb
@@ -155,5 +155,46 @@ class TestResolveReportLevels:
     def test_absent_in_old_release(self, tmp_path: Path):
         assert resolve_refdb(self._release(tmp_path, False), mode="profile").report_levels is None
 
-    def test_annotate_mode_ignores_it(self, tmp_path: Path):
+    def test_annotate_mode_ignores_the_profile_manifest(self, tmp_path: Path):
         assert resolve_refdb(self._release(tmp_path, True), mode="annotate").report_levels is None
+
+    def test_annotate_mode_finds_its_own(self, tmp_path: Path):
+        release = self._release(tmp_path, False)
+        (tmp_path / "osmo_refdb.annotate_report_levels.tsv").write_text(ANNOTATE_MANIFEST)
+        assert resolve_refdb(release, mode="annotate").report_levels \
+            == tmp_path / "osmo_refdb.annotate_report_levels.tsv"
+        assert resolve_refdb(release, mode="profile").report_levels is None
+
+
+ANNOTATE_MANIFEST = (
+    "# osmo_refdb annotate report levels: one row per reporting unit, for osmotool annotate --method hmm.\n"
+    "unit\treport_level\tmembers\tparalog_group\tmethod\treason\n"
+    "ectA\tgene\tectA\t\thmm\tmeets_threshold\n"
+    "ect_bc\tgroup\tectB,ectC\tect_bc\thmm\tmeets_threshold\n"
+    "kdpA\tnone\tkdpA\t\thmm\tbelow_threshold\n"
+    "betA\tgene\tbetA\t\thmm\tmeets_threshold\n"
+)
+
+
+class TestReportLevelsMethod:
+    def test_annotate_manifest_names_its_method(self, tmp_path: Path):
+        p = tmp_path / "a.tsv"
+        p.write_text(ANNOTATE_MANIFEST)
+        assert report_levels_method(p) == "hmm"
+
+    def test_profile_manifest_has_none(self, tmp_path: Path):
+        assert report_levels_method(_manifest(tmp_path)) is None
+
+    def test_several_methods_raise(self, tmp_path: Path):
+        p = tmp_path / "a.tsv"
+        p.write_text(ANNOTATE_MANIFEST + "ectC\tgene\tectC\t\tdiamond\tmeets_threshold\n")
+        with pytest.raises(ValueError, match="several methods"):
+            report_levels_method(p)
+
+    def test_missing_members_count_zero_without_warning(self, caplog):
+        units = [ReportUnit("ect_bc", "group", ("ectB", "ectC")),
+                 ReportUnit("betA", "gene", ("betA",))]
+        with caplog.at_level("WARNING"):
+            rows = aggregate_report_units(units, {"ectB": 1.0}, {"ectB": 7.0}, missing_is_zero=True)
+        assert [(r["raw_count"], r["rpm"]) for r in rows] == [(1.0, 7.0), (0.0, 0.0)]
+        assert caplog.text == ""

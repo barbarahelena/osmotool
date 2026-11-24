@@ -6,6 +6,7 @@ It needs `prodigal` and `hmmsearch` on PATH, or `diamond` with `--method diamond
 
 - [Running it](#running-it)
 - [How genes are called](#how-genes-are-called)
+- [Report units](#report-units)
 - [Output](#output)
 - [Multi-subunit systems](#multi-subunit-systems)
 - [NaCl tolerance prediction](#nacl-tolerance-prediction)
@@ -38,11 +39,22 @@ osmotool predict-nacl osmo_refdb_v10 results/genomeA results/genomeB \
 
 `--method diamond` uses `diamond blastp` instead, with the release's per-family bitscore cutoffs (`osmo_refdb.diamond_cutoffs.tsv`). It avoids the HMMER dependency, but HMM is more specific on full-length proteins. `--method both` runs the two side by side and writes `<prefix>.hmm.*` and `<prefix>.diamond.*`.
 
+## Report units
+
+Some families are close paralogs that the HMMs confuse even at full length (e.g. the OpuA/OpuB/OpuC permeases), and some are not reliable at all. The release decides, on its calibration proteins, how each can be reported, in `osmo_refdb.annotate_report_levels.tsv`:
+
+- `gene`: the family is reported on its own;
+- `group`: a paralog group is reported as the sum of its members;
+- `none`: not reported. The `reason` column says why: below the F1 threshold, too few calibration sequences, or not stable under the bootstrap.
+
+The levels were decided for `--method hmm`, so only HMM output gets `<prefix>.unit_counts.tsv` (with `--method both`, `<prefix>.hmm.unit_counts.tsv`). Read results from this table. `gene_counts.tsv` still lists every family on its own, and the NaCl model uses it as it is.
+
 ## Output
 
 | File | Contents |
 |---|---|
 | `<prefix>.gene_counts.tsv` | Copies per family, with assembly statistics in the header |
+| `<prefix>.unit_counts.tsv` | With `--method hmm`: copies per report unit; read results from this table |
 | `<prefix>.systems.tsv` | Multi-subunit system calls |
 | `<prefix>.gene_coordinates.tsv` | One row per called gene: contig, start, end, strand |
 | `<prefix>.aln_stats.tsv` | Run summary |
@@ -59,17 +71,35 @@ osmotool predict-nacl osmo_refdb_v10 results/genomeA results/genomeB \
 # contig_n50     4215606
 # filtered_reads 187
 # proteins_with_hits 187
-gene    raw_count   copies_per_kb
+gene    raw_count   COPIES_PER_KB
 ectA    1.0         5.87
 ectB    1.0         6.42
 ```
 
 - `raw_count` is the family's copy number in the genome.
-- `copies_per_kb` = `raw_count × 10⁹ / (gene_length_bp × total_proteins)`, a copy number corrected for gene length and proteome size, for comparing genomes of different sizes. It is not an abundance and can't be compared with `profile`'s RPM.
+- `COPIES_PER_KB` = `raw_count × 10⁹ / (gene_length_bp × total_proteins)`, a copy number corrected for gene length and proteome size, for comparing genomes of different sizes. It is not an abundance and can't be compared with `profile`'s RPM.
 - `genome_bp` counts every sequence character, `N`s included. `gc` is (G+C) / (A+C+G+T), leaving ambiguity codes out. `n_contigs` and `contig_n50` describe the FASTA records. These four are computed from the assembly even when `--proteins` is given, so genome size and GC can be used as covariates without a separate step.
 - `proteins_with_hits` counts proteins with a hit that passed filtering, before best-hit selection and decoy removal, so it can be slightly higher than the sum of `raw_count`. `filtered_reads` holds the same number under its older name; prefer `proteins_with_hits` in new code.
 
 Parsers should skip `#` lines they don't recognise.
+
+### `unit_counts.tsv`
+
+```
+# total_proteins      4128
+# proteins_with_hits  187
+# report_levels       osmo_refdb_v11/osmo_refdb.annotate_report_levels.tsv
+unit          report_level  members            status    raw_count  COPIES_PER_KB
+ectA          gene          ectA               reported  1.0        5.87
+opu_permease  group         opuAB,opuBB,opuCB  reported  1.0        4.12
+opuAC         none          opuAC              excluded  NA         NA
+```
+
+- `group` sums its members' copies. Each protein counts for one family only, so this is the number of proteins called as any member.
+- `excluded` units get `NA`, never 0. Don't read them as "gene absent": the table says nothing about them.
+- `not_in_manifest`: a label with a call but in no unit, listed so no protein disappears silently.
+
+Every unit gets a row, zeros included. `aln_stats.tsv` gains `report_levels`, `units_reported` and `units_excluded`.
 
 ### `gene_coordinates.tsv`
 

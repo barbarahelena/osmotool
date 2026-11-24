@@ -78,7 +78,7 @@ osmotool annotate refdb/v10 genome.fasta --predict_nacl \
 
 With the container, put `docker run --rm -v "$PWD":/data -w /data barbarahelena/osmotool:0.10.1` where these commands say `osmotool`.
 
-`profile` writes `<prefix>.unit_counts.tsv` (read results from this one), `gene_counts.tsv`, `aln_stats.tsv` and `markers.tsv`. `annotate` writes `gene_counts.tsv`, `systems.tsv` and `gene_coordinates.tsv`, plus `nacl_prediction.tsv` with `--predict_nacl`. The mode docs describe every column.
+`profile` writes `<prefix>.unit_counts.tsv` (read results from this one), `gene_counts.tsv`, `aln_stats.tsv` and `markers.tsv`. `annotate` writes `gene_counts.tsv`, `systems.tsv` and `gene_coordinates.tsv`, plus `unit_counts.tsv` when the release has annotate report levels and `nacl_prediction.tsv` with `--predict_nacl`. The mode docs describe every column.
 
 ## License and citation
 

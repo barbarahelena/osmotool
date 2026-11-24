@@ -795,6 +795,21 @@ def load_report_levels(path: str | Path) -> list[ReportUnit]:
     return units
 
 
+def report_levels_method(path: str | Path) -> str | None:
+    """The annotate method a report-level manifest was decided for (its
+    ``method`` column: osmo_refdb's annotate_report_levels.tsv says ``hmm``),
+    or None when the manifest has no such column (profile's)."""
+    with open(path) as fh:
+        reader = csv.DictReader((line for line in fh if not line.startswith("#")),
+                                delimiter="\t")
+        if "method" not in (reader.fieldnames or []):
+            return None
+        methods = {row["method"] for row in reader if row.get("method")}
+    if len(methods) > 1:
+        raise ValueError(f"{path}: rows for several methods ({', '.join(sorted(methods))})")
+    return methods.pop() if methods else None
+
+
 def catalog_fallthrough(units) -> frozenset[str]:
     """The families whose catalog calls fall through to translated search:
     the members of every unit with catalog_reported "no". The catalog then

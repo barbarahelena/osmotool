@@ -28,6 +28,7 @@ from osmotool.functions import (
     load_diamond_cutoffs,
     load_cascade_config,
     load_report_levels,
+    report_levels_method,
     catalog_fallthrough,
     load_excluded_families,
     extract_fastq_subset,
@@ -675,6 +676,7 @@ def run_annotate(
     exclude_families: str | None = None,
     skip_systems: bool = False,
     systems_config: str | None = None,
+    report_levels: str | None = None,
 ) -> dict[str, tuple[Path, Path, Path | None, Path | None]]:
     """
     Annotate an assembly (or pre-called proteins) against osmodiamond.
@@ -733,6 +735,14 @@ def run_annotate(
         membership is not overridable this way (structural, not a
         calibration knob); only distance defaults are.
 
+    report_levels:
+        Optional path to osmo_refdb's <release>.annotate_report_levels.tsv
+        (v11+), decided on the calibration proteins for one method (its
+        ``method`` column, ``hmm``). That method's output also gets
+        <prefix>.unit_counts.tsv: gene_counts.tsv summed to the reporting
+        units, with units at report_level none excluded. The other method's
+        output gets none, since the levels say nothing about it.
+
     Returns
     -------
     {method_name: (gene_counts_path, aln_stats_path, systems_path_or_None, coordinates_path_or_None)}
@@ -753,6 +763,15 @@ def run_annotate(
         check_tool("prodigal")
 
     resolve_out_prefix(out_prefix)
+
+    # --- the release's annotate report levels, for the method they were decided for ---
+    units, levels_method = None, None
+    if report_levels is not None:
+        levels_method = report_levels_method(report_levels) or "hmm"
+        units = load_report_levels(report_levels)
+        if levels_method not in (("diamond", "hmm") if method == "both" else (method,)):
+            log.info("%s was decided for --method %s; no unit_counts.tsv for --method %s",
+                     report_levels, levels_method, method)
 
     # --- whole-assembly stats for the gene_counts.tsv header ---
     # Read from the assembly even when --proteins skips Prodigal; ASSEMBLY
@@ -825,6 +844,7 @@ def run_annotate(
             exclude_families=exclude_families,
             orf_coords=orf_coords, systems_def=systems_def,
             assembly_stats=assembly_stats,
+            units=units if levels_method == "diamond" else None, report_levels=report_levels,
         )
         if not keep_aln:
             aln_file.unlink(missing_ok=True)
@@ -842,6 +862,7 @@ def run_annotate(
             exclude_families=exclude_families,
             orf_coords=orf_coords, systems_def=systems_def,
             assembly_stats=assembly_stats,
+            units=units if levels_method == "hmm" else None, report_levels=report_levels,
         )
         if not keep_aln:
             hmm_aln_file.unlink(missing_ok=True)
@@ -877,6 +898,8 @@ def _finish_annotate_method(
     orf_coords: dict | None = None,
     systems_def: dict | None = None,
     assembly_stats: AssemblyStats | None = None,
+    units: list | None = None,
+    report_levels: str | None = None,
 ) -> tuple[Path, Path, Path | None, Path | None]:
     """Shared best-hit selection / counting / copies_per_kb / output-writing tail for
     one annotate method (diamond or hmm), factored out since both methods
@@ -925,6 +948,20 @@ def _finish_annotate_method(
         assembly_stats=assembly_stats,
         proteins_with_hits=filtered_reads,
     )
+    unit_stats = {}
+    if units is not None:
+        # a genome lacks most families: a member without a called protein is 0
+        unit_rows = aggregate_report_units(units, counts, copies_per_kb, missing_is_zero=True)
+        write_unit_counts(
+            out_prefix, unit_rows,
+            header=[("total_proteins", total_proteins), ("proteins_with_hits", filtered_reads)],
+            value_label="COPIES_PER_KB", report_levels=report_levels,
+        )
+        unit_stats = {
+            "report_levels": str(report_levels),
+            "units_reported": sum(1 for r in unit_rows if r["status"] == "reported"),
+            "units_excluded": ",".join(r["unit"] for r in unit_rows if r["status"] == "excluded") or "none",
+        }
     stats = build_aln_stats(
         mode=f"annotate:{method_name}",
         total_reads=total_proteins,
@@ -935,6 +972,7 @@ def _finish_annotate_method(
         min_query_cover=min_query_cover if min_query_cover is not None else "n/a",
         min_subject_cover=min_subject_cover if min_subject_cover is not None else "n/a",
         evalue=evalue if evalue is not None else "n/a",
+        extra=unit_stats or None,
     )
     stats_path = write_aln_stats(out_prefix, stats)
 

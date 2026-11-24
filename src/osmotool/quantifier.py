@@ -233,9 +233,16 @@ def aggregate_report_units(
     rpm: dict[str, float],
     copies_per_genome: dict[str, float | None] | None = None,
     sources: dict[str, tuple[float, float, float]] | None = None,
+    missing_is_zero: bool = False,
 ) -> list[dict]:
     """
     Per-family counts → one row per reporting unit, in manifest order.
+
+    *rpm* is the normalised value per family: RPM in ``profile``,
+    copies_per_kb in ``annotate``. A member missing from *counts* counts 0;
+    profile warns about it (its counts list every searched family, so a
+    missing one was left out of the output), annotate passes
+    *missing_is_zero* (a genome lacks most families).
 
     reported (gene or group): raw_count, rpm and copies_per_genome are the
       members' sums. Each read counts once, toward its single best-hit
@@ -282,7 +289,7 @@ def aggregate_report_units(
                          "translated_count": None})
             continue
         missing = [m for m in u.members if m not in counts]
-        if missing:
+        if missing and not missing_is_zero:
             log.warning("Report unit %s: no count for %s (excluded from profile output?), counted as 0",
                         u.unit, ", ".join(missing))
         copies = None

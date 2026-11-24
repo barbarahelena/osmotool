@@ -152,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
                 exclude_families=str(refdb.exclude_families) if refdb.exclude_families else None,
                 skip_systems=args.skip_systems,
                 systems_config=args.systems_config,
+                report_levels=str(refdb.report_levels) if refdb.report_levels else None,
             )
             if nacl_model is not None:
                 counts_path, _, systems_path, _ = results["hmm"]

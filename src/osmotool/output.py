@@ -125,15 +125,22 @@ def write_unit_counts(
     out_prefix: str | Path,
     rows: list[dict],
     *,
-    total_fragments: int | float,
-    filtered_fragments: int | float,
+    total_fragments: int | float | None = None,
+    filtered_fragments: int | float | None = None,
     report_levels: str | Path,
     with_copies: bool = False,
     with_sources: bool = False,
+    header: list[tuple[str, object]] | None = None,
+    value_label: str = "RPM",
 ) -> Path:
     """
     Write ``<out_prefix>.unit_counts.tsv``: gene_counts.tsv summed to the
     release's reporting units (rows from quantifier.aggregate_report_units).
+
+    ``profile`` writes total_fragments and filtered_fragments above the table
+    and RPM as the value column. ``annotate`` passes *header*
+    (total_proteins, proteins_with_hits) and *value_label* COPIES_PER_KB,
+    the column name its gene_counts.tsv uses.
 
     Format::
 
@@ -159,13 +166,15 @@ def write_unit_counts(
     catalog counts 0: its reads went to translated search.
     """
     out_path = Path(str(out_prefix) + ".unit_counts.tsv")
+    if header is None:
+        header = [("total_fragments", total_fragments), ("filtered_fragments", filtered_fragments)]
     with open(out_path, "w") as fh:
-        fh.write(f"# total_fragments\t{total_fragments}\n")
-        fh.write(f"# filtered_fragments\t{filtered_fragments}\n")
+        for key, value in header:
+            fh.write(f"# {key}\t{value}\n")
         fh.write(f"# report_levels\t{report_levels}\n")
         src_col = "\tcatalog_count\tcatalog_ambiguous\ttranslated_count" if with_sources else ""
         extra_col = "\tcopies_per_genome" if with_copies else ""
-        fh.write(f"unit\treport_level\tmembers\tstatus\traw_count\tRPM{src_col}{extra_col}\n")
+        fh.write(f"unit\treport_level\tmembers\tstatus\traw_count\t{value_label}{src_col}{extra_col}\n")
 
         def count(x, fmt=".1f"):
             return "NA" if x is None else format(x, fmt)

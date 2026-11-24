@@ -133,7 +133,7 @@ class RefDb:
     train_refs: Path | None = None    # osmo_refdb.train_refs.faa (profile only)
     markers: MarkerDb | None = None   # markers/ (profile only)
     nacl_model: Path | None = None    # nacl_model/ directory (annotate only)
-    report_levels: Path | None = None  # osmo_refdb.profile_report_levels.tsv (profile only)
+    report_levels: Path | None = None  # osmo_refdb.<mode>_report_levels.tsv (annotate: v11+)
     catalogs: dict[str, Path] = field(default_factory=dict)  # catalogs/<name>/ (profile only)
     root: Path = Path(".")
     release: str = ""                 # PROVENANCE.json's release, else the directory name
@@ -266,7 +266,8 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
     the optional ``osmo_refdb.profile_report_levels.tsv`` (v10+) and the
     gene catalogs under ``catalogs/<name>/`` (see choose_catalog); in
     annotate mode, the optional ``nacl_model/`` subdirectory (NaCl-max
-    predictor, see nacl.py).
+    predictor, see nacl.py) and ``osmo_refdb.annotate_report_levels.tsv``
+    (v11+, decided for ``--method hmm``).
 
     *mode* is ``"profile"`` or ``"annotate"`` -- the only difference is
     which excluded-families list and cascade/cutoffs file apply. The
@@ -311,10 +312,10 @@ def resolve_refdb(database: str, mode: str) -> RefDb:
         if not train_refs.exists():
             train_refs = None
         markers = _resolve_markers(root)
-        report_levels = root / "osmo_refdb.profile_report_levels.tsv"
-        if not report_levels.exists():
-            report_levels = None
         catalogs = _resolve_catalogs(root)
+    report_levels = root / f"osmo_refdb.{mode}_report_levels.tsv"
+    if not report_levels.exists():
+        report_levels = None
 
     return RefDb(
         dmnd=dmnd, hmm=hmm, cascade_config=cascade_config,
