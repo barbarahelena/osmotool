@@ -54,7 +54,7 @@ The release ships a gene catalog under `catalogs/<name>/`. v10 ships `gmgc_gut`:
 - A read aligned at ≥ 97% nucleotide identity over ≥ 45 bp is settled by the gene it maps to.
 - If that gene belongs to a panel family, the read counts for that family. A gene belongs to a family when its full-length HMM score reaches the family's gathering cutoff, exactly as in `annotate --method hmm`.
 - If the gene is background, a homolog below the cutoff, or a decoy, the read is settled but dropped. The index includes these competitors, so their reads land on their own gene instead of being forced onto a family.
-- A read with valid placements on different families is ambiguous: it is split equally over them in `catalog_ambiguous` and kept out of `raw_count`.
+- A read with valid placements that disagree (two families, or a family and a gene that isn't counted) is ambiguous and is not settled: it goes on to step 2. In a catalog of metagenomic genes the disagreement is mostly with a partial copy of the same gene, too short to reach the gathering cutoff, so translated search usually calls the read correctly. With `--catalog_only` there is no step 2: the read is split equally over its families in `catalog_ambiguous` and kept out of `raw_count`.
 - A read the catalog would call as a unit whose catalog calls the release doesn't report (`catalog_reported` `no`, see [Report units](#report-units)) is not settled either.
 - Every other read goes on to step 2.
 
@@ -123,12 +123,12 @@ A fragment is a read pair (paired-end) or a read (single-end). Each mate of a pa
 # total_fragments    1000000
 # filtered_fragments 42753.5
 gene    raw_count   RPM     catalog_count   catalog_ambiguous   translated_count   copies_per_genome
-betA    12.5        12.5    10.0            0.50                2.5                0.412
+betA    12.5        12.5    10.0            0.00                2.5                0.412
 ectA     4.0         4.0     0.0            0.00                4.0                0.087
 ```
 
 - `raw_count` = `catalog_count + translated_count`.
-- `catalog_ambiguous` is kept out of `raw_count`.
+- `catalog_ambiguous` is kept out of `raw_count`. It is 0 unless `--catalog_only`: otherwise ambiguous reads go to translated search and are counted in `translated_count`.
 - With `--translated_only` the three source columns are left out.
 - `copies_per_genome` appears when the release ships `markers/`.
 
@@ -169,10 +169,12 @@ Two columns, `metric` and `value`. Counts are in fragments, except the `catalog_
 | `report_levels`, `units_reported`, `units_excluded` | The report-levels file and its outcome |
 | `catalog`, `catalog_release`, `catalog_hmm_sha256` | Which catalog the run used, and the release and HMM checksum it was annotated with (`none (--translated_only)` without one) |
 | `catalog_dir`, `catalog_aligner`, `catalog_index` | Where it was read from, the aligner, and the index kind |
-| `catalog_reads_called`, `catalog_reads_ambiguous` | Reads the catalog settled on one family, or on several |
+| `catalog_reads_called` | Reads the catalog settled on one family |
+| `catalog_reads_ambiguous` | Reads whose valid placements disagree: sent to translated search, or settled and split with `--catalog_only` |
 | `catalog_reads_dropped`, `catalog_dropped_by_reason` | Reads settled on a gene that isn't counted (background, homolog, decoy) |
 | `catalog_reads_fallback` | Reads that went on to translated search |
 | `catalog_reads_fallthrough` | Of those, reads the catalog called as a unit with `catalog_reported` `no` |
+| `catalog_reads_ambiguous_fallback` | Of those, ambiguous reads (0 with `--catalog_only`) |
 | `catalog_units_not_reported` | Those units, or `not in manifest` when the release doesn't say |
 | `catalog_settled_fraction` | Share of assigned fragments the catalog settled (see below) |
 | `translated_fallback` | `yes`, or `no` with `--catalog_only` |

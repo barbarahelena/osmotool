@@ -313,9 +313,10 @@ def _line(**kw) -> str:
     return "\t".join(_sam(**kw)) + "\n"
 
 
-def _settle(lines, paired=False, fallthrough=frozenset()):
+def _settle(lines, paired=False, fallthrough=frozenset(), ambiguous_to_fallback=False):
     return settle_records(["@HD\tVN:1.6\n", *lines], _catalog(), paired=paired,
-                          min_identity=0.97, min_aligned=45, fallthrough=fallthrough)
+                          min_identity=0.97, min_aligned=45, fallthrough=fallthrough,
+                          ambiguous_to_fallback=ambiguous_to_fallback)
 
 
 def test_settle_fallthrough_family_goes_to_translated_search():
@@ -354,7 +355,38 @@ def test_settle_unique_call_and_same_family_alternative():
     assert res.counts == {"ectA": 1.0} and res.n_ambiguous == 0 and res.ambiguous == {}
 
 
+def test_settle_ambiguous_goes_to_fallback_with_translated_search():
+    import io
+    hits = io.StringIO()
+    res = settle_records(["@HD\tVN:1.6\n",
+                          _line(qname="a", xa=[("geneH", 10, "150M", 0)]),   # family vs homolog
+                          _line(qname="b", xa=[("geneB", 10, "150M", 0)]),   # two families
+                          _line(qname="c")],
+                         _catalog(), paired=False, min_identity=0.97, min_aligned=45,
+                         hits_out=hits, ambiguous_to_fallback=True)
+    assert res.n_ambiguous == 2 and res.n_ambiguous_fallback == 2 and res.n_fallback == 2
+    assert res.ambiguous == {} and res.counts == {"ectA": 1.0} and res.n_called == 1
+    assert res.accepted[0] == {"c"}                     # a and b are copied to the fallback FASTQ
+    rows = hits.getvalue().splitlines()[1:]
+    assert [r.split("\t")[0] for r in rows] == ["c"]    # not settled, so not in catalog_hits
+
+
+def test_settle_ambiguous_to_fallback_leaves_unique_calls_and_drops_alone():
+    res = _settle([_line(qname="a", xa=[("geneA2", 100, "150M", 1)]), _line(qname="d", rname="geneH")],
+                  ambiguous_to_fallback=True)
+    assert res.counts == {"ectA": 1.0} and res.n_dropped == 1
+    assert res.n_ambiguous == 0 and res.n_fallback == 0 and res.accepted[0] == {"a", "d"}
+
+
+def test_settle_ambiguous_with_a_fallthrough_family_counts_as_fallthrough_only():
+    res = _settle([_line(xa=[("geneB", 10, "150M", 0)])], fallthrough=frozenset({"ectB"}),
+                  ambiguous_to_fallback=True)
+    assert res.n_fallthrough == 1 and res.n_fallback == 1
+    assert res.n_ambiguous == 0 and res.n_ambiguous_fallback == 0
+
+
 def test_settle_ambiguous_between_families_is_split_and_kept_out_of_counts():
+    # --catalog_only (no ambiguous_to_fallback): settled and split
     res = _settle([_line(xa=[("geneB", 10, "150M", 0)])])
     assert res.counts == {} and res.n_ambiguous == 1
     assert res.ambiguous == {"ectA": 0.5, "ectB": 0.5}

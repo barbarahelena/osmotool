@@ -157,14 +157,17 @@ def run_profile(
         defaults: 0.97, 45) is settled by the catalog's full-length HMM
         annotation -- counted for the gene's family (on a fused gene, the
         family whose region holds the read), dropped if the gene is not
-        assigned (background gene, homolog below GA, HMM decoy), or counted
-        as ambiguous if equally valid
-        placements disagree. Only the remaining reads go to DIAMOND and the
-        cascade, unless translated_fallback is False (catalog-only, e.g. a
-        gut cohort with a matching catalog). raw_count is the catalog's
+        assigned (background gene, homolog below GA, HMM decoy). A read
+        whose valid placements disagree (ambiguous) is not settled: it goes
+        to DIAMOND and the cascade with the reads the catalog didn't match.
+        Only those remaining reads go to translated search, unless
+        translated_fallback is False (catalog-only, e.g. a gut cohort with a
+        matching catalog); then ambiguous reads are settled and split over
+        their families in catalog_ambiguous. raw_count is the catalog's
         unique calls plus the translated calls; gene_counts.tsv and
-        unit_counts.tsv show catalog_count, catalog_ambiguous and
-        translated_count separately. Markers always see all reads.
+        unit_counts.tsv show catalog_count, catalog_ambiguous (0 unless
+        catalog-only) and translated_count separately. Markers always see
+        all reads.
     report_levels:
         Optional path to osmo_refdb's <release>.profile_report_levels.tsv
         (v10 and later): the level at which each family is reliable on
@@ -221,6 +224,7 @@ def run_profile(
             min_identity=catalog_min_identity, min_aligned=catalog_min_aligned,
             hits_out=Path(str(out_prefix) + ".catalog_hits.tsv") if keep_aln else None,
             fallthrough=fallthrough,
+            ambiguous_to_fallback=translated_fallback,
         )
         if translated_fallback:
             if paired:
@@ -441,6 +445,7 @@ def _catalog_stats(catalog: Catalog | None, cat, translated_fallback: bool,
                                               sorted(cat.dropped_by_reason.items())) or "none",
         "catalog_reads_fallback": cat.n_fallback,
         "catalog_reads_fallthrough": cat.n_fallthrough,
+        "catalog_reads_ambiguous_fallback": cat.n_ambiguous_fallback,
         "catalog_units_not_reported": not_reported,
         "catalog_settled_fraction": ("NA" if settled_fraction is None
                                      else f"{settled_fraction:.4f}"),

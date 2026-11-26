@@ -64,9 +64,9 @@ def write_gene_counts(
         ``profile`` with a catalog: {family: (catalog_count,
         catalog_ambiguous, translated_count)}; adds those three columns after
         the normalised value. raw_count is catalog_count + translated_count;
-        catalog_ambiguous (reads with equally valid catalog placements on
-        different families, split between them) is reported but not in
-        raw_count. Omitted (None) leaves the file unchanged.
+        catalog_ambiguous (--catalog_only: reads whose valid catalog
+        placements disagree, split over their families; 0 otherwise, as such
+        reads go to translated search) is reported but not in raw_count. Omitted (None) leaves the file unchanged.
     proteins_with_hits:
         ``annotate`` mode only. When given, written as
         ``# proteins_with_hits`` directly after ``# filtered_reads``. It is
