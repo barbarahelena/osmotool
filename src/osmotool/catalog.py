@@ -25,9 +25,10 @@ assigned by near-exact nucleotide matching (bwa-mem3 mem by default) to those ge
                                   gene without a hit, homolog below GA, HMM
                                   decoy): confidently not that family
                         ambiguous several placements pass the thresholds
-                                  (XA tag) and disagree on the label: settled
-                                  (no fallback) but counted separately,
-                                  split over its families
+                                  (XA tag) and disagree on the label: goes to
+                                  fallback when translated search runs; with
+                                  --catalog_only settled but counted
+                                  separately, split over its families
                         fallback  unmapped or below the thresholds: the read
                                   goes on to the translated search (DIAMOND
                                   + cascade + report levels), unless
@@ -713,16 +714,17 @@ class CatalogResult:
     ambiguous: dict[str, float] = field(default_factory=dict)   # family -> fractional weight
     n_reads: int = 0
     n_called: int = 0
-    n_ambiguous: int = 0
+    n_ambiguous: int = 0                      # placements disagree: settled, or (ambiguous_to_fallback) to translated search
     n_dropped: int = 0
-    n_fallback: int = 0                       # reads left to translated search, fall-through included
+    n_fallback: int = 0                       # reads left to translated search, fall-through and ambiguous included
     n_fallthrough: int = 0                    # of those: called as a family whose catalog calls are not reported
+    n_ambiguous_fallback: int = 0             # of those: ambiguous (ambiguous_to_fallback)
     dropped_by_reason: dict[str, int] = field(default_factory=dict)
 
 
 def settle_records(
     sam_lines, catalog: Catalog, *, paired: bool, min_identity: float, min_aligned: int,
-    hits_out=None, fallthrough: frozenset[str] = frozenset(),
+    hits_out=None, fallthrough: frozenset[str] = frozenset(), ambiguous_to_fallback: bool = False,
 ) -> CatalogResult:
     """
     The catalog decision for every read in a SAM stream (primary records;
@@ -734,19 +736,34 @@ def settle_records(
     placement gets a label (the family for a call, "drop" otherwise):
       - one label: unique. A call counts *weight* for its family; a drop is
         dropped.
-      - several labels: ambiguous. The read is settled (no fallback), and each
-        family among the labels gets weight / n_labels in `ambiguous`; the
-        drop share is discarded. Ambiguous weight is kept out of `counts`, the
-        way Cayman reports unique and combined counts separately.
+      - several labels: ambiguous. Counted in n_ambiguous. With
+        *ambiguous_to_fallback* (profile with translated search) the read is
+        not settled: it goes to fallback like a read below the thresholds,
+        and is counted in n_ambiguous_fallback as well. Without it
+        (--catalog_only, where nothing else would see the read) the read is
+        settled, and each family among the labels gets weight / n_labels in
+        `ambiguous`; the drop share is discarded. Ambiguous weight is kept
+        out of `counts`, the way Cayman reports unique and combined counts
+        separately.
     Paired mates are judged independently and weigh 0.5 each, as count_hits.
     *fallthrough*: families whose catalog calls the release does not report
     (catalog_reported "no", functions.catalog_fallthrough). A read called as
     one of them, or ambiguous with one among its labels, is not settled: it
     goes to fallback like a read below the thresholds, and is counted in
-    n_fallthrough as well.
+    n_fallthrough as well (not in n_ambiguous).
     *hits_out*: an open text file; every settled read is written as a TSV row
     (read, mate, gene, decision, label, identity, aligned_bp, n_placements).
-    Fall-through reads are not settled, so they are not written.
+    Fall-through reads, and ambiguous reads sent to fallback, are not
+    settled, so they are not written.
+
+    Why ambiguous reads go to translated search: on real genomes the label
+    the catalog disagrees with is mostly "drop" on a homolog of the same
+    family, a partial gene (catalogs of metagenomic assemblies hold many)
+    that scores below the gathering cutoff only because it is short. The
+    read is then from the family, and DIAMOND usually calls it so; settling
+    it as ambiguous loses it from raw_count (osmo_refdb
+    studies/mixed_strain_catalog: recall on catalogued strains 0.54 settled,
+    0.70 sent on, DIAMOND alone 0.68, false calls unchanged).
     """
     weight = 0.5 if paired else 1.0
     res = CatalogResult(counts={}, lengths_aa={}, accepted={0: set(), 1: set(), 2: set()})
@@ -777,6 +794,11 @@ def settle_records(
         if fallthrough and not fallthrough.isdisjoint(labels):
             res.n_fallback += 1
             res.n_fallthrough += 1
+            continue
+        if len(labels) > 1 and ambiguous_to_fallback:
+            res.n_ambiguous += 1
+            res.n_fallback += 1
+            res.n_ambiguous_fallback += 1
             continue
         rid = norm_read_id(fields[0])
         res.accepted[mate].add(rid)
@@ -812,12 +834,13 @@ def map_reads(
     max_alternatives: int = 50,
     hits_out: str | Path | None = None,
     fallthrough: frozenset[str] = frozenset(),
+    ambiguous_to_fallback: bool = False,
 ) -> CatalogResult:
     """Map reads to the catalog with its aligner (bwa-mem3 by default) and
-    settle them (settle_records). `mem -h max_alternatives` lists up to that
-    many alternative hits in XA, so ambiguity between catalog genes is seen.
-    With *hits_out*, every settled read is written as a TSV for auditing and
-    benchmarking."""
+    settle them (settle_records; *fallthrough* and *ambiguous_to_fallback*
+    as there). `mem -h max_alternatives` lists up to that many alternative
+    hits in XA, so ambiguity between catalog genes is seen. With *hits_out*,
+    every settled read is written as a TSV for auditing and benchmarking."""
     paired = reads1 is not None and reads2 is not None
     inputs = [reads1, reads2] if paired else [singles or reads1]
     cmd = [catalog.aligner_bin, "mem", "-v", "1", "-t", str(threads),
@@ -828,7 +851,8 @@ def map_reads(
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1 << 20)
     try:
         res = settle_records(proc.stdout, catalog, paired=paired, min_identity=min_identity,
-                             min_aligned=min_aligned, hits_out=out_fh, fallthrough=fallthrough)
+                             min_aligned=min_aligned, hits_out=out_fh, fallthrough=fallthrough,
+                             ambiguous_to_fallback=ambiguous_to_fallback)
     finally:
         proc.stdout.close()
         rc = proc.wait()
@@ -836,9 +860,11 @@ def map_reads(
             out_fh.close()
     if rc != 0:
         raise RuntimeError(f"{catalog.aligner_bin} mem failed (exit {rc})")
-    log.info("Catalog: %d reads, %d called, %d ambiguous, %d dropped (%s), %d to fallback "
+    log.info("Catalog: %d reads, %d called, %d ambiguous%s, %d dropped (%s), %d to fallback "
              "(%d of them called as a family whose catalog calls are not reported)",
-             res.n_reads, res.n_called, res.n_ambiguous, res.n_dropped,
+             res.n_reads, res.n_called, res.n_ambiguous,
+             " (to fallback)" if ambiguous_to_fallback else " (settled, split over their families)",
+             res.n_dropped,
              ", ".join(f"{k} {v}" for k, v in sorted(res.dropped_by_reason.items())) or "none",
              res.n_fallback, res.n_fallthrough)
     return res
