@@ -185,7 +185,7 @@ def run_profile(
     or just independently present somewhere in the community) simply isn't
     checkable at read length. This mode reports each gene family's
     abundance independently, same as before Task 2 added the systems
-    layer -- a system-level claim (opuA/opuB/opuC/mrp/ect/ots/trk/ktr)
+    layer -- a system-level claim (opuA/opuB_opuC/mrp/ect/ots/trk/ktr)
     requires `annotate` mode (or a dedicated assembly+binning step) on the
     same samples. See docs/profile.md for the same note.
     """

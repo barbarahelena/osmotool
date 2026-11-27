@@ -33,20 +33,13 @@ exists) for its organism.
 
 ## Why these particular species
 
-- **B. subtilis, S. aureus, L. monocytogenes, E. faecalis** — Firmicutes
-  reference organisms, chosen to check `opuA`/`opuB`/`opuC`/`mrp`/`trk`/`ktr`
-  colocalization across multiple independent lineages, not just one. B.
-  subtilis specifically is the organism most of these systems were originally
-  characterized in.
+- **B. subtilis, S. aureus, L. monocytogenes, E. faecalis** — Firmicutes reference organisms, chosen to check `opuA`/`opuB_opuC`/`mrp`/`trk`/`ktr` colocalization across multiple independent lineages, not just one. B. subtilis specifically is the organism most of these systems were originally characterized in.
 - **H. elongata** — the actual ectoine-biosynthesis discovery organism;
   the only genome in this set that gave a real `ect` (ectA/B/C) positive.
 - **C. aerofaciens** — the organism (or closest relative) the
   `galE_murB_mazG` locus finding (Culligan et al. 2012, *ISME J*,
   doi:10.1038/ismej.2012.38) is from.
-- **E. coli** — cross-domain negative control for the Firmicutes-specific
-  systems (`mrp`/`opuA`/`opuB`/`opuC`/`ect`), and the real positive for
-  `ots` (otsBA) and the real negative-but-present-elsewhere case for `trk`
-  (trkA/trkH genuinely both present, genuinely not colocalized).
+- **E. coli** — cross-domain negative control for the Firmicutes-specific systems (`mrp`/`opuA`/`opuB_opuC`/`ect`), and the real positive for `ots` (otsBA) and the real negative-but-present-elsewhere case for `trk` (trkA/trkH genuinely both present, genuinely not colocalized).
 - **H. volcanii** — an archaeon with, per osmo_refdb's own real-genome
   validation notes, zero training-set overlap with anything its HMMs/DIAMOND
   references were built from: a genuinely independent negative control, not
@@ -63,21 +56,13 @@ calibration numbers, the paralog-confusion rescue mechanism, and the
 `galE_murB_mazG` system are all cited against specific measurements from
 these genomes) — this is a pointer, not a duplicate:
 
-- Every real operon found (`mrp`, `opuA`, `opuC` across multiple species;
-  `ect` and `galE_murB_mazG` in their respective source organisms; `otsBA`
-  in E. coli) sits within a few genes / under 100bp of itself, informing the
-  3-gene/2000bp default window.
+- Every real operon found (`mrp`, `opuA`, OpuB/OpuC-type across multiple species; `ect` and `galE_murB_mazG` in their respective source organisms; `otsBA` in E. coli) sits within a few genes / under 100bp of itself, informing the 3-gene/2000bp default window.
 - Several species carry a duplicate/paralogous operon copy nearby on the
   *opposite* strand — motivated the strand-consistency check.
-- `opuB` never fully resolves in any species tested; traced to two distinct
-  causes (a real refdb HMM recall gap in `opuBA`, and a genuine sequence
-  mislabeling of `opuBC` as `opuCC`) rather than one.
+- OpuB and OpuC used to be two systems, but the HMMs can't tell their subunits apart, so which of the two a genome got followed single label flips: E. faecalis V583's one operon (opuBB, opuCC, opuCB, opuBA) was `opuB` with osmo_refdb v11 and `opuC` with v9, and B. subtilis, which carries both, got `opuC` only. They are now one system, `opuB_opuC`, with either/or slots: present in B. subtilis, L. monocytogenes, S. aureus and E. faecalis, absent in the other five (E. coli's yehWXYZ gives 2 of 3 subunits).
 - `galE_murB_mazG` fires only on *C. aerofaciens*, confirming the wide
   (30-gene/35000bp), strand-agnostic window is specific, not just permissive.
-- A paralog-confusion rescue mechanism initially included `proX` as a
-  rescue-eligible sibling for `opuAC`/`opuBC`/`opuCC`; this produced a false
-  positive on E. coli (`opuA` "present" via E. coli's own real, but
-  non-orthologous, ProU operon) and was corrected — `proX` is now excluded.
+- A paralog-confusion rescue mechanism initially included `proX` as a rescue-eligible sibling for `opuAC`/`opuBC`/`opuCC`; this produced a false positive on E. coli (`opuA` "present" via E. coli's own real, but non-orthologous, ProU operon) and was corrected — `proX` is now excluded. The opu substrate-binding proteins are no longer rescued at all since the OpuB/OpuC merge (see `systems.py`).
 
 ## Reproducing
 

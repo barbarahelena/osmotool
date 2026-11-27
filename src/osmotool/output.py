@@ -308,7 +308,7 @@ def write_aln_stats(
 #: log-only warning: this is written into the actual output file so it
 #: survives past the terminal a run happened in.
 PROFILE_SYSTEMS_NOTE = (
-    "multi-subunit system calls (opuA/opuB/opuC/mrp/ect/ots/trk/ktr) are NOT "
+    "multi-subunit system calls (opuA/opuB_opuC/mrp/ect/ots/trk/ktr) are NOT "
     "confirmed co-located in read-profiling mode -- abundances below are per-gene "
     "and independent; a system-level 'present' claim requires annotate mode "
     "(or a dedicated assembly+binning step) on the same samples"
@@ -384,7 +384,7 @@ def write_system_calls(
 
         system  present subunit_count   colocalized fragmented_assembly_flag   contig  mandatory_hits  accessory_hits  rescued_hits
         opuA    True    3               True        False                      NODE_1  opuAA,opuAB,opuAC   -           -
-        opuB    False   2               False       False                      -       opuBB,opuBC     -               opuBC<-opuCC
+        opuB_opuC True  3               True        False                      NODE_1  opuBA,opuBB,opuCC   -           -
         mrp     False   2               False       True                       -       mrpA,mrpC       -               -
 
     present/colocalized/fragmented_assembly_flag: see systems.detect_systems's

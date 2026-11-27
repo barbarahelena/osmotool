@@ -63,23 +63,22 @@ and a solid margin below the false-bridging distances seen. Still not
 exhaustive -- loosen via --systems_config if your own genomes show real
 operons this misses.
 
-`opuB` never once resolved to a full colocalized operon across any of the
-six species tested (always 1-2 of 3 mandatory subunits). Checking WHY
-mattered: in 4/5 species, the gene immediately after a confirmed `opuBB`
-is a real ORF mislabeled `opuCC` -- exactly the substrate-binding-domain
-(SBD) cross-paralog confusion families.yaml documents (shared PF04069 with
-opuAC/opuCC/proX) -- while the OTHER blocker, `opuBA`, has no hit at all
-under any family at the position where it should be, in every species
-checked. Those are two different problems: one is a labeling ambiguity
-this layer can resolve with positional evidence (see
-PARALOG_CONFUSION_CLIQUES / _rescue_missing_mandatory_families below); the
-other is a real HMM/DIAMOND recall gap at the refdb level that no amount of
-positional reasoning can invent evidence for. The rescue mechanism fixes
-the former (visible in `rescued_hits`, e.g. "opuBC<-opuCC") but -- honestly
--- doesn't flip `opuB` to `present` in any of the six species tested,
-because `opuBA`'s gap is the one actually blocking it everywhere. Worth
-flagging back to osmo_refdb as a distinct, separate finding from the SBD
-confusion.
+OpuB and OpuC are one system here, `opuB_opuC`, not two. They are
+paralogous operons from a gene duplication (ATPase, two permeases, a
+substrate-binding protein that sets the substrate range), and the HMMs
+can't tell their subunits apart: osmo_refdb v11's
+annotate_report_levels.tsv reports none of opuBA/opuBC/opuCA/opuCC at any
+level (calibration F1_all 0.05-0.35; opuCC 0.07) and opuBB/opuCB only as
+the opu_permease group. As separate systems, the operon was found but its
+identity followed single label flips. E. faecalis V583's one operon
+(labelled opuBB, opuCC, opuCB, opuBA) was called opuB under v11, after
+rescuing opuBC<-opuCC, and opuC under v9, where the ATPase was labelled
+opuCA. B. subtilis 168 carries both operons side by side and got opuC only.
+`opuB_opuC` asks only what the labels can answer -- is there an
+OpuB/OpuC-type operon -- with an either/or slot per subunit, the way `ktr`
+takes ktrB or ktrD. It doesn't say which paralogue it is, or how many
+copies the genome has. `opuA` stays its own system: it resolved correctly
+in every test genome.
 """
 
 from __future__ import annotations
@@ -108,11 +107,12 @@ class SystemDef:
 
     mandatory:
         Tuple of "slots"; each slot is a frozenset of family labels, ANY one
-        of which satisfies that slot. Almost always a single-member
-        frozenset (e.g. {"opuAA"}) -- a multi-member slot models a real
-        either/or paralog relationship (e.g. ktr's pore-forming subunit is
-        satisfied by either ktrB or ktrD, confirmed as paralogs of each
-        other in families.yaml) without inventing separate machinery for it.
+        of which satisfies that slot. Usually a single-member frozenset
+        (e.g. {"opuAA"}) -- a multi-member slot models a real either/or
+        paralog relationship without inventing separate machinery for it
+        (ktr's pore-forming subunit is satisfied by either ktrB or ktrD,
+        confirmed as paralogs of each other in families.yaml; every
+        opuB_opuC slot takes either the OpuB or the OpuC label).
         A system is only `present` when EVERY slot is satisfied by a hit
         co-located with the others (see detect_systems).
     accessory:
@@ -161,13 +161,16 @@ DEFAULT_SYSTEMS: dict[str, SystemDef] = {
         name="opuA",
         mandatory=(frozenset({"opuAA"}), frozenset({"opuAB"}), frozenset({"opuAC"})),
     ),
-    "opuB": SystemDef(
-        name="opuB",
-        mandatory=(frozenset({"opuBA"}), frozenset({"opuBB"}), frozenset({"opuBC"})),
-    ),
-    "opuC": SystemDef(
-        name="opuC",
-        mandatory=(frozenset({"opuCA"}), frozenset({"opuCB"}), frozenset({"opuCC"})),
+    # OpuB and OpuC together (see the module docstring): each slot takes
+    # either paralogue's label. Named so it can't be mistaken for the opuBC
+    # family.
+    "opuB_opuC": SystemDef(
+        name="opuB_opuC",
+        mandatory=(
+            frozenset({"opuBA", "opuCA"}),  # ATPase
+            frozenset({"opuBB", "opuCB"}),  # permease
+            frozenset({"opuBC", "opuCC"}),  # substrate-binding protein
+        ),
     ),
     "mrp": SystemDef(
         name="mrp",
@@ -243,50 +246,37 @@ DEFAULT_SYSTEMS: dict[str, SystemDef] = {
 # phenotype assay -- osmotool has no equivalent and can't produce one).
 # Deliberately narrow: only cliques families.yaml explicitly calls out as
 # systematically swapped for each other, not every family sharing a
-# broad/promiscuous domain (e.g. NOT opuAA/opuBA/opuCA or opuAB/opuBB/opuCB
-# -- families.yaml gives them the same negative-query cross-exclusion
-# boilerplate as every other family sharing a generic ABC-transporter fold,
-# but doesn't flag them as an observed swapping problem the way it does for
-# the two cliques below, and real calibration data backs that distinction
-# up: the gene immediately upstream of a real, confirmed opuB operon's
-# opuBB is often a genuine gap -- no hit at all, under any family -- not a
-# mislabeled hit rescue could reattribute).
+# broad/promiscuous domain (e.g. NOT opuAA/opuBA/opuCA or opuAB/opuBB/opuCB,
+# which families.yaml gives only the generic ABC-transporter
+# cross-exclusion).
 #
-# "Documented cross-hit risk between two labels" and "these are
-# interchangeable copies of the same biological thing" are NOT the same
-# claim, and conflating them is a real mistake this module made once
-# already (see CHANGELOG-equivalent discussion in the PR history): proX
-# was originally included alongside opuAC/opuBC/opuCC below because
-# families.yaml's negative-query construction cross-excludes all four from
-# each other's reference sets. But opuAC/opuBC/opuCC really are three
-# structurally-identical, co-occurring PARALOGOUS COPIES of the same
-# recurring operon architecture (confirmed directly: B. subtilis carries
-# real, separate opuA AND opuC operons in the same genome) -- a hit
-# mislabeled opuCC really can be opuBC's own subunit, just landed under a
-# close paralog's label. proX belongs to a different, DELIBERATELY KEPT
-# SEPARATE system (ProU) -- not a duplicate copy of Opu, but a documented
-# non-orthologous, convergently domain-similar system (the same reasoning
-# that got proV/proW deferred entirely rather than folded into
-# opuAA/opuAB). Rescuing opuAC from a real proX hit doesn't identify a
-# mislabeled Opu subunit; it conflates ProU with Opu, and would very
-# plausibly fire the same way on any Proteobacterium carrying a real ProU
-# operon, not just E. coli specifically -- proX is deliberately EXCLUDED
-# from the rescue clique below for exactly this reason (kept only as the
-# distinctly-documented negative-query relationship it actually is,
-# families.yaml's own concern, not a rescue-eligible sibling).
+# The opu substrate-binding clique (opuAC, opuBC, opuCC; PF04069) was
+# dropped when opuB and opuC became one system:
+#   - opuBC<->opuCC, the only rescue that ever fired on the test genomes,
+#     is now an either/or slot of opuB_opuC, and a same-slot alternative is
+#     never a rescue (see _rescue_missing_mandatory_families).
+#   - What was left were A<->B/C rescues: moving a binding protein into
+#     opuA from an opuBC/opuCC hit, or into opuB_opuC from an opuAC hit, on
+#     the strength of ATPase/permease anchors that are themselves
+#     A/B/C-ambiguous (osmo_refdb v11 reports opuAA/opuBA/opuCA at no level
+#     and opuAB/opuBB/opuCB only as the opu_permease group). That could
+#     pull a real OpuB/OpuC operon's binding protein into opuA. opuA never
+#     needed it: on the nine test genomes, B. subtilis and L. monocytogenes
+#     have opuA present from their own opuAC hits, and no opuA call used a
+#     rescue.
+# proX (ProU) was never rescue-eligible either. ProU is a separate,
+# non-orthologous system that only shares the binding-protein domain, and
+# rescuing opuAC from proX once called E. coli's ProVWX operon an opuA (see
+# test_proX_never_rescues_opuAC).
 _CONFUSION_CLIQUES = (
-    # SBD (substrate-binding domain), PF04069 -- proX deliberately
-    # excluded, see the block comment above.
-    frozenset({"opuAC", "opuBC", "opuCC"}),
-    # Pore-forming subunit, PF02386. Treated differently from the SBD case
-    # above: trkH (Proteobacteria naming) and ktrB/ktrD (Firmicutes naming)
-    # are documented in families.yaml as the SAME underlying Trk/Ktr
-    # K+-uptake system under lineage-specific naming conventions, not two
-    # independently-arisen analogous systems the way ProU/Opu are -- but
-    # this is this module's own reading of that documentation, not
-    # something functionally confirmed either. Worth an independent check
-    # by whoever has closer domain knowledge of osmo_refdb's own family
-    # curation before trusting it as firmly as the SBD case's exclusion.
+    # Pore-forming subunit, PF02386. trkH (Proteobacteria naming) and
+    # ktrB/ktrD (Firmicutes naming) are documented in families.yaml as the
+    # SAME underlying Trk/Ktr K+-uptake system under lineage-specific naming
+    # conventions, not two independently-arisen analogous systems the way
+    # ProU/Opu are -- but this is this module's own reading of that
+    # documentation, not something functionally confirmed. Worth an
+    # independent check by whoever has closer domain knowledge of
+    # osmo_refdb's own family curation.
     frozenset({"trkH", "ktrB", "ktrD"}),
 )
 
@@ -403,7 +393,7 @@ def _collect_rescue_hits(
     {mandatory_family: [_Hit, ...]} -- rescue candidates for each of
     *sys_def*'s mandatory families that has documented paralog-confusion
     siblings (PARALOG_CONFUSION_CLIQUES). Each _Hit keeps its own TRUE
-    family label (e.g. "opuCC"), not the family it might rescue -- these
+    family label (e.g. "ktrB"), not the family it might rescue -- these
     are only accepted once independently confirmed positionally adjacent to
     a real subunit of the SAME system (see
     _rescue_missing_mandatory_families), never on label alone.
@@ -447,8 +437,8 @@ def _rescue_missing_mandatory_families(
     subunit of the SAME operon does.
 
     A confirmed rescue is merged into the returned hits_by_family under its
-    TARGET family (e.g. a mislabeled "opuCC" hit satisfying opuBC's slot is
-    stored as an opuBC-family _Hit, not opuCC) so every downstream step
+    TARGET family (e.g. a mislabeled "ktrB" hit satisfying trk's trkH slot
+    is stored as a trkH-family _Hit, not ktrB) so every downstream step
     (subunit_count, the colocalization search, mandatory_hits reporting)
     treats it exactly like a real hit. Returns (augmented_hits_by_family,
     {target_family: original_sibling_label}) -- the second dict is only
@@ -500,9 +490,11 @@ def _rescue_missing_mandatory_families(
 def _slot_satisfied_on_contig(
     slot: frozenset[str], hits_by_family: dict[str, list[_Hit]], contig: str
 ) -> list[_Hit]:
-    """Hits on *contig* for any family in *slot*."""
+    """Hits on *contig* for any family in *slot*, in sorted family order so
+    the combination _contig_is_colocalized picks (and so mandatory_hits)
+    doesn't depend on string-hash order when a slot has several labels."""
     out = []
-    for family in slot:
+    for family in sorted(slot):
         out.extend(h for h in hits_by_family.get(family, ()) if h.coord.contig == contig)
     return out
 
@@ -539,7 +531,7 @@ def _strand_consistent(a: _Hit, b: _Hit, strand_index: dict[str, dict[int, int]]
     opposite-strand gene.
 
     Checked against real B. subtilis/E. coli data: every real operon tested
-    (mrp, opuA, opuC, otsBA) is a single unbroken same-strand run. This is
+    (mrp, opuA, opuB/opuC, otsBA) is a single unbroken same-strand run. This is
     a complementary signal, not a substitute for the distance window --
     e.g. E. coli's trkA/trkH (hundreds of genes apart, not a real operon)
     also happen to share a strand, so distance is still what rejects it.
@@ -640,7 +632,12 @@ def detect_systems(
             fam for slot in sys_def.mandatory for fam in slot if fam in hits_by_family
         )
         accessory_families_found = sorted(fam for fam in sys_def.accessory if fam in hits_by_family)
-        subunit_count = len(mandatory_families_found) + len(accessory_families_found)
+        # one per satisfied slot, not per label: opuB_opuC with all six
+        # labels found is still 3 subunits
+        mandatory_slots_found = sum(
+            1 for slot in sys_def.mandatory if any(fam in hits_by_family for fam in slot)
+        )
+        subunit_count = mandatory_slots_found + len(accessory_families_found)
 
         if subunit_count == 0:
             calls[name] = SystemCall(
