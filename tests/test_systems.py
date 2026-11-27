@@ -80,6 +80,100 @@ class TestOpuA:
         assert call.fragmented_assembly_flag is True
 
 
+class TestOpuBOpuC:
+    """opuB_opuC: one OpuB/OpuC-type system with either/or slots, because the
+    HMMs can't tell the two paralogous operons' subunits apart. Layouts are
+    the real ones from `annotate --method hmm` against osmo_refdb v11."""
+
+    def _build(self, labels: dict[int, str], strand: int = 1, contig: str = "NODE_1"):
+        best_hits, orf_coords = {}, {}
+        for idx, fam in labels.items():
+            orf_id = f"{contig}_{idx}"
+            best_hits[orf_id] = _hit(fam, orf_id)
+            orf_coords[orf_id] = _coord(contig, idx, *_gene(contig, idx), strand=strand)
+        return best_hits, orf_coords
+
+    def test_name_does_not_collide_with_the_opuBC_family(self):
+        assert "opuB_opuC" in DEFAULT_SYSTEMS
+        assert not {"opuB", "opuC", "opuBC"} & set(DEFAULT_SYSTEMS)
+
+    def test_slots_accept_either_paralog(self):
+        assert DEFAULT_SYSTEMS["opuB_opuC"].mandatory == (
+            frozenset({"opuBA", "opuCA"}),
+            frozenset({"opuBB", "opuCB"}),
+            frozenset({"opuBC", "opuCC"}),
+        )
+
+    def test_pure_opuB_and_pure_opuC_labels_are_present(self):
+        for labels in (("opuBA", "opuBB", "opuBC"), ("opuCA", "opuCB", "opuCC")):
+            best_hits, orf_coords = self._build(dict(enumerate(labels, start=1)))
+            call = detect_systems(best_hits, orf_coords)["opuB_opuC"]
+            assert call.present is True
+            assert call.mandatory_hits == tuple(sorted(labels))
+
+    def test_efaecalis_mixed_labels_on_minus_strand_present(self):
+        # E. faecalis V583, NC_004668.1 ORFs 830-833 (minus strand): one
+        # operon labelled opuBB, opuCC, opuCB, opuBA. The old opuB/opuC pair
+        # called it opuB (after rescuing opuBC<-opuCC) or opuC, depending on
+        # which way the ATPase label fell in a given release.
+        best_hits, orf_coords = self._build(
+            {830: "opuBB", 831: "opuCC", 832: "opuCB", 833: "opuBA"}, strand=-1
+        )
+        call = detect_systems(best_hits, orf_coords)["opuB_opuC"]
+        assert call.present is True
+        assert call.colocalized is True
+        assert call.contig == "NODE_1"
+        assert call.rescued_hits == ()
+        # two valid chains (BA+BB+CC, BA+CB+CC); the pick must not depend on
+        # string-hash order
+        assert call.mandatory_hits == ("opuBA", "opuBB", "opuCC")
+        assert call.subunit_count == 3
+
+    def test_bsubtilis_two_adjacent_operons_present(self):
+        # B. subtilis 168 carries OpuB and OpuC side by side (ORFs 3488-3491
+        # and 3498-3501), labelled opuCB,opuCC,opuCB,opuCA and
+        # opuBB,opuCC,opuCB,opuCA. The old opuC system was present and opuB
+        # absent; both operons are an OpuB/OpuC-type system.
+        labels = {
+            3488: "opuCB", 3489: "opuCC", 3490: "opuCB", 3491: "opuCA",
+            3498: "opuBB", 3499: "opuCC", 3500: "opuCB", 3501: "opuCA",
+        }
+        best_hits, orf_coords = self._build(labels)
+        call = detect_systems(best_hits, orf_coords)["opuB_opuC"]
+        assert call.present is True
+        assert call.rescued_hits == ()
+        # one row for the system, however many operons the genome carries
+        assert call.mandatory_hits == ("opuCA", "opuCB", "opuCC")
+        assert call.subunit_count == 3
+        # either operon on its own is enough
+        for lo, hi in ((3488, 3491), (3498, 3501)):
+            one = {i: f for i, f in labels.items() if lo <= i <= hi}
+            assert detect_systems(*self._build(one))["opuB_opuC"].present is True
+
+    def test_two_slots_only_is_absent(self):
+        # E. coli K-12: opuBA + opuBB from yehWXYZ, no binding protein call.
+        best_hits, orf_coords = self._build({1: "opuBA", 2: "opuBB"})
+        call = detect_systems(best_hits, orf_coords)["opuB_opuC"]
+        assert call.present is False
+        assert call.subunit_count == 2
+        assert call.mandatory_hits == ("opuBA", "opuBB")
+
+    def test_subunit_count_counts_slots_not_labels(self):
+        # every label of both paralogues found, scattered: still 3 subunits
+        labels = {1: "opuBA", 100: "opuCA", 200: "opuBB", 300: "opuCB", 400: "opuBC", 500: "opuCC"}
+        call = detect_systems(*self._build(labels))["opuB_opuC"]
+        assert call.present is False
+        assert call.subunit_count == 3
+        assert call.mandatory_hits == ("opuBA", "opuBB", "opuBC", "opuCA", "opuCB", "opuCC")
+
+    def test_opposite_strand_paralogous_copy_does_not_bridge(self):
+        best_hits, orf_coords = self._build({1: "opuBA", 2: "opuBB"}, strand=1)
+        more_hits, more_coords = self._build({3: "opuCC"}, strand=-1)
+        best_hits.update(more_hits)
+        orf_coords.update(more_coords)
+        assert detect_systems(best_hits, orf_coords)["opuB_opuC"].present is False
+
+
 class TestProximityWindow:
     """Boundary-tests _within_window via the ots system (2 mandatory slots,
     default max_distance_genes=8 / max_distance_bp=8000)."""
@@ -167,68 +261,83 @@ class TestKtrOrSlot:
         assert "ktrD" in call.mandatory_hits
         assert "ktrB" not in call.mandatory_hits
 
+    def test_both_pore_labels_count_as_one_subunit(self):
+        # B. subtilis 168 has ktrA, ktrB and ktrD
+        best_hits = {
+            "NODE_1_1": _hit("ktrA", "NODE_1_1"),
+            "NODE_1_2": _hit("ktrB", "NODE_1_2"),
+            "NODE_1_900": _hit("ktrD", "NODE_1_900"),
+        }
+        orf_coords = {
+            i: _coord("NODE_1", int(i.rsplit("_", 1)[1]), *_gene("NODE_1", int(i.rsplit("_", 1)[1])))
+            for i in best_hits
+        }
+        call = detect_systems(best_hits, orf_coords)["ktr"]
+        assert call.present is True
+        assert call.subunit_count == 2
+        assert call.mandatory_hits == ("ktrA", "ktrB")
+
 
 class TestParalogRescue:
     """Positional rescue for osmo_refdb's documented paralog-confusion
     cliques (systems.PARALOG_CONFUSION_CLIQUES) -- see
-    systems._rescue_missing_mandatory_families's docstring. Mirrors the real
-    finding on B. subtilis/S. aureus/etc.: opuBC gets systematically
-    mislabeled opuCC (shared PF04069 substrate-binding domain), but only
-    counts as opuBC when positionally confirmed adjacent to a real opuB
-    subunit -- never on label alone."""
+    systems._rescue_missing_mandatory_families's docstring. A sibling label
+    only counts when positionally confirmed adjacent to a real subunit of
+    the same system -- never on label alone. Since the opuB/opuC merge only
+    the Trk/Ktr pore clique is left."""
 
-    def test_rescues_opuBC_via_mislabeled_opuCC(self):
+    def test_no_opu_family_is_rescue_eligible(self):
+        from osmotool.systems import PARALOG_CONFUSION_CLIQUES
+        opu = {f"opu{s}{u}" for s in "ABC" for u in "ABC"} | {"proX"}
+        assert not opu & set(PARALOG_CONFUSION_CLIQUES)
+        assert not opu & set().union(*PARALOG_CONFUSION_CLIQUES.values())
+
+    @pytest.mark.parametrize("sbd", ["opuBC", "opuCC"])
+    def test_opuA_never_takes_a_BC_binding_protein(self, sbd):
+        # opuAA + opuAB next to a B/C-labelled binding protein: opuA stays
+        # absent rather than pulling the B/C protein into its opuAC slot
         best_hits = {
-            "NODE_1_1": _hit("opuBA", "NODE_1_1"),
-            "NODE_1_2": _hit("opuBB", "NODE_1_2"),
-            "NODE_1_3": _hit("opuCC", "NODE_1_3"),  # really opuBC, mislabeled
+            "NODE_1_1": _hit("opuAA", "NODE_1_1"),
+            "NODE_1_2": _hit("opuAB", "NODE_1_2"),
+            "NODE_1_3": _hit(sbd, "NODE_1_3"),
         }
         orf_coords = {
             f"NODE_1_{i}": _coord("NODE_1", i, *_gene("NODE_1", i)) for i in (1, 2, 3)
         }
-        calls = detect_systems(best_hits, orf_coords)
-        call = calls["opuB"]
-        assert call.present is True
-        assert call.colocalized is True
-        assert "opuBC" in call.mandatory_hits
-        assert call.rescued_hits == ("opuBC<-opuCC",)
-
-    def test_rescue_alone_does_not_flip_present_when_another_slot_is_genuinely_missing(self):
-        # opuBA has NO hit anywhere (a real recall gap, not a labeling
-        # issue) -- rescuing opuBC still can't make the system present.
-        best_hits = {
-            "NODE_1_1": _hit("opuBB", "NODE_1_1"),
-            "NODE_1_2": _hit("opuCC", "NODE_1_2"),  # really opuBC, mislabeled
-        }
-        orf_coords = {
-            f"NODE_1_{i}": _coord("NODE_1", i, *_gene("NODE_1", i)) for i in (1, 2)
-        }
-        calls = detect_systems(best_hits, orf_coords)
-        call = calls["opuB"]
+        call = detect_systems(best_hits, orf_coords)["opuA"]
         assert call.present is False
-        # but the rescue is still surfaced, precisely the useful signal
-        # even though the system overall isn't present
-        assert call.rescued_hits == ("opuBC<-opuCC",)
-        assert "opuBC" in call.mandatory_hits
+        assert call.rescued_hits == ()
+        assert "opuAC" not in call.mandatory_hits
 
-    def test_rescue_requires_positional_confirmation_not_label_alone(self):
-        # an "opuCC"-labeled hit far from any real opuB subunit must NOT
-        # be rescued -- there's no anchor to justify the reattribution.
+    def test_opuB_opuC_never_takes_an_opuAC_binding_protein(self):
         best_hits = {
             "NODE_1_1": _hit("opuBA", "NODE_1_1"),
             "NODE_1_2": _hit("opuBB", "NODE_1_2"),
-            "NODE_1_500": _hit("opuCC", "NODE_1_500"),  # far away, unrelated
+            "NODE_1_3": _hit("opuAC", "NODE_1_3"),
+        }
+        orf_coords = {
+            f"NODE_1_{i}": _coord("NODE_1", i, *_gene("NODE_1", i)) for i in (1, 2, 3)
+        }
+        call = detect_systems(best_hits, orf_coords)["opuB_opuC"]
+        assert call.present is False
+        assert call.rescued_hits == ()
+        assert call.subunit_count == 2
+
+    def test_rescue_requires_positional_confirmation_not_label_alone(self):
+        # a "ktrB"-labeled hit far from trkA must NOT be rescued as trkH --
+        # there's no anchor to justify the reattribution.
+        best_hits = {
+            "NODE_1_1": _hit("trkA", "NODE_1_1"),
+            "NODE_1_500": _hit("ktrB", "NODE_1_500"),  # far away, unrelated
         }
         orf_coords = {
             "NODE_1_1": _coord("NODE_1", 1, *_gene("NODE_1", 1)),
-            "NODE_1_2": _coord("NODE_1", 2, *_gene("NODE_1", 2)),
             "NODE_1_500": _coord("NODE_1", 500, *_gene("NODE_1", 500)),
         }
-        calls = detect_systems(best_hits, orf_coords)
-        call = calls["opuB"]
+        call = detect_systems(best_hits, orf_coords)["trk"]
         assert call.present is False
         assert call.rescued_hits == ()
-        assert "opuBC" not in call.mandatory_hits
+        assert "trkH" not in call.mandatory_hits
 
     def test_trk_rescues_trkH_via_mislabeled_ktrB(self):
         best_hits = {

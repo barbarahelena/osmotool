@@ -318,11 +318,16 @@ class TestWriteSystemCalls:
                 fragmented_assembly_flag=True, contig=None,
                 mandatory_hits=("mrpA", "mrpC"), accessory_hits=(),
             ),
-            "opuB": SystemCall(
-                system="opuB", present=False, subunit_count=2, colocalized=False,
-                fragmented_assembly_flag=False, contig=None,
-                mandatory_hits=("opuBB", "opuBC"), accessory_hits=(),
-                rescued_hits=("opuBC<-opuCC",),
+            "opuB_opuC": SystemCall(
+                system="opuB_opuC", present=True, subunit_count=3, colocalized=True,
+                fragmented_assembly_flag=False, contig="NODE_1",
+                mandatory_hits=("opuBA", "opuBB", "opuCC"), accessory_hits=(),
+            ),
+            "trk": SystemCall(
+                system="trk", present=True, subunit_count=2, colocalized=True,
+                fragmented_assembly_flag=False, contig="NODE_2",
+                mandatory_hits=("trkA", "trkH"), accessory_hits=(),
+                rescued_hits=("trkH<-ktrB",),
             ),
         }
 
@@ -351,9 +356,12 @@ class TestWriteSystemCalls:
         lines = out.read_text().splitlines()[1:]
         assert lines[0].startswith("mrp\tFalse\t2\tFalse\tTrue\t-\tmrpA,mrpC\t-\t-")
         assert lines[1].startswith("opuA\tTrue\t3\tTrue\tFalse\tNODE_1\topuAA,opuAB,opuAC\t-\t-")
+        # one row for OpuB and OpuC together, none for the old pair
+        assert lines[2] == "opuB_opuC\tTrue\t3\tTrue\tFalse\tNODE_1\topuBA,opuBB,opuCC\t-\t-"
+        assert not any(line.split("\t")[0] in ("opuB", "opuC") for line in lines)
 
     def test_rescued_hits_column(self, tmp_path: Path):
         prefix = str(tmp_path / "sample")
         out = write_system_calls(prefix, self._calls())
         content = out.read_text()
-        assert "opuBC<-opuCC" in content
+        assert "trkH<-ktrB" in content

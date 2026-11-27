@@ -118,8 +118,7 @@ Several families are subunits of one complex. Counting each subunit, as `gene_co
 | System | Mandatory subunits | Accessory | Fusion |
 |---|---|---|---|
 | `opuA` | opuAA, opuAB, opuAC | | |
-| `opuB` | opuBA, opuBB, opuBC | | |
-| `opuC` | opuCA, opuCB, opuCC | | |
+| `opuB_opuC` | opuBA *or* opuCA, opuBB *or* opuCB, opuBC *or* opuCC | | |
 | `mrp` | mrpA, mrpB, mrpC, mrpE | mrpD, mrpF, mrpG | mrpA+mrpB as one ORF (`mrpA_mrpB_fused`) |
 | `ect` | ectA, ectB, ectC | | |
 | `ots` | otsA, otsB | | |
@@ -130,7 +129,7 @@ Several families are subunits of one complex. Counting each subunit, as `gene_co
 | Column | Meaning |
 |---|---|
 | `present` | Every mandatory subunit was found together on one contig |
-| `subunit_count` | Subunits found anywhere in the assembly |
+| `subunit_count` | Subunits found anywhere in the assembly, one per mandatory slot (ktrB and ktrD together count once) plus accessory subunits |
 | `colocalized` | Same as `present`, kept as its own column |
 | `fragmented_assembly_flag` | Subunits were found, but on different contigs, so co-location can't be judged. Subunits too far apart on the same contig are a real "not colocalized" |
 | `contig` | The contig the system is on (`-` otherwise) |
@@ -141,18 +140,22 @@ Several families are subunits of one complex. Counting each subunit, as `gene_co
 
 The mandatory subunits, sorted by position, must form one chain:
 
-- **Distance.** Every consecutive pair is within 3 intervening genes and 2000 bp. In complete genomes of six species (*B. subtilis*, *S. aureus*, *L. monocytogenes*, *E. faecalis*, *H. elongata*, *E. coli*), the `mrp`, `opuA`, `opuC`, `ect` and `ots` operons all had 0 genes between subunits. MacSyFinder's CRISPR-Cas models use the same 3-gene limit. `--systems_config` overrides the window per system.
+- **Distance.** Every consecutive pair is within 3 intervening genes and 2000 bp. In complete genomes of six species (*B. subtilis*, *S. aureus*, *L. monocytogenes*, *E. faecalis*, *H. elongata*, *E. coli*), the `mrp`, `opuA`, OpuB/OpuC-type, `ect` and `ots` operons all had 0 genes between subunits. MacSyFinder's CRISPR-Cas models use the same 3-gene limit. `--systems_config` overrides the window per system.
 - **Strand.** Consecutive subunits share a strand, with no gene on the opposite strand between them. Several species carry a paralogous copy of an operon right next to the first, on the opposite strand (e.g. *H. elongata*'s second `mrp`-like cluster, 236 bp away), and this check keeps the two apart.
 - **`galE_murB_mazG` is a neighbourhood, not an operon.** Culligan et al. (2012, *ISME J* 6:1916–1925, [doi:10.1038/ismej.2012.38](https://doi.org/10.1038/ismej.2012.38)) found the three genes on one ~39 kb fosmid from a *Collinsella*-related organism, each conferring salt tolerance in *E. coli*. In *C. aerofaciens* ATCC 25986, mazG sits 23 genes (20.8 kb) from galE/murB, across a strand flip. This system uses a 30-gene / 35 kb window and no strand check. Of the validation genomes, it fires only on *C. aerofaciens*.
 
 ### Fusions and paralog rescue
 
 - **mrpA+mrpB fusion.** A hit on the `mrpA_mrpB_fused` DIAMOND reference satisfies both subunits. There is no fused HMM, so `--method hmm` undercounts the lineages that carry the fusion; most don't.
-- **Paralog rescue.** When a mandatory subunit has no hit under its own label, a hit under a known paralog that sits in the right place, next to another subunit of the same system, is moved to the missing slot and listed in `rescued_hits` (e.g. `opuBC<-opuCC`). It applies within two groups: the opu substrate-binding proteins (opuAC, opuBC, opuCC), and the Trk/Ktr pore proteins (trkH, ktrB, ktrD). proX is left out on purpose: it belongs to ProU, a different system, and including it called *E. coli*'s ProVWX operon an `opuA`.
+- **Paralog rescue.** When a mandatory subunit has no hit under its own label, a hit under a known paralog that sits in the right place, next to another subunit of the same system, is moved to the missing slot and listed in `rescued_hits` (e.g. `trkH<-ktrB`). It applies to the Trk/Ktr pore proteins (trkH, ktrB, ktrD). The opu substrate-binding proteins are not rescued: swaps between OpuB and OpuC labels are covered by `opuB_opuC`'s either/or slots, and a rescue between opuA and `opuB_opuC` would rest on ATPase and permease labels that are just as ambiguous. proX is never rescued either: it belongs to ProU, a different system, and rescuing from it called *E. coli*'s ProVWX operon an `opuA`.
 
-### opuB
+### opuB_opuC
 
-opuBA is the least reliable family in the panel, so treat opuBA calls, and `opuB` system calls that depend on one, with caution. In the six-species validation, `opuB` never resolved to a full operon. The rescue fixes the opuBC side. For opuBA there was no hit at all where it should be. A `pepABC_decoy` takes peptide ABC ATPase hits away from opuBA, but the remaining calls are probably other ABC ATPases, which a decoy can't separate. An opuBA hit doesn't confirm the gene, and a missing hit doesn't rule it out. The osmo_refdb v10 README says to read opuBA and opuBB with caution, or only together with their substrate-binding protein (opuBC).
+OpuB and OpuC are paralogous operons from a gene duplication (ATPase, two permeases, substrate-binding protein), and the HMMs can't tell their subunits apart. osmo_refdb v11's report levels don't report opuBA, opuBC, opuCA or opuCC at any level (calibration F1 0.05–0.35), and report opuBB and opuCB only within the `opu_permease` group. Called as two systems, the operon was found but its identity followed single label flips. *E. faecalis* V583's one operon, labelled opuBB, opuCC, opuCB, opuBA, came out as `opuB` with v11 and as `opuC` with v9, where its ATPase was labelled opuCA. *B. subtilis* 168 carries both operons side by side and was called `opuC` only.
+
+`opuB_opuC` takes either label in each slot, the way `ktr` takes ktrB or ktrD. It is present in *B. subtilis*, *L. monocytogenes*, *S. aureus* and *E. faecalis*, and absent in *H. elongata*, *E. coli* K-12, *C. aerofaciens*, *H. volcanii* and *R. baltica*. In *E. coli* the yehWXYZ (osmF) transporter gives an opuBA and an opuBB call but no binding protein, so the call stays at 2 subunits.
+
+It tells you an OpuB/OpuC-type transporter is there, not which one, and not how many copies: the substrate range sits in the binding protein, the worst-separated label (opuCC F1 0.07). `mandatory_hits` lists the labels of the operon that satisfied the system. Don't read them as OpuB versus OpuC. `opuA` is still called on its own.
 
 ## NaCl tolerance prediction
 
