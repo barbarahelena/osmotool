@@ -47,7 +47,12 @@ SELF_CHECK_FILE = "self_check.json"
 # base_score (osmo_refdb v10's model: 0.48 instead of 5.92), shifting every
 # prediction; see SELF_CHECK_FILE for the guard that catches this generally
 MIN_XGBOOST = (3, 1)
-SUPPORTED_SCHEMA_VERSIONS = {1}
+# 1: one feature per family. 2: adds "family_groups", {feature: [families]},
+# each fed to the model as the sum of its members' raw_count (osmo_refdb
+# trains on annotate's reporting units, and a paralog group reported only
+# as a group is one feature). An osmotool without 2 refuses such a model
+# instead of reading the group feature as missing.
+SUPPORTED_SCHEMA_VERSIONS = {1, 2}
 DECOY_SUFFIX = "_decoy"
 # features the model cannot do without; a gene_counts.tsv from osmotool
 # < 0.8.0 lacks the gc / n_contigs header lines
@@ -204,7 +209,8 @@ def features_from_annotate(
 ) -> dict[str, float | None]:
     """Raw feature dict for one genome, as osmo_refdb's features.py builds it.
 
-    A family absent from gene_counts.tsv counts as 0. Every name the schema
+    A family absent from gene_counts.tsv counts as 0. A schema-2 group
+    feature ("family_groups") is the sum of its members' raw_count. Every name the schema
     or the salt-in detector can ask for is present; base features missing
     from the header are None. 'fragmented_systems' (systems with
     fragmented_assembly_flag set) is informational, not a model feature or
@@ -224,8 +230,14 @@ def features_from_annotate(
     }
     for f in families:
         feat[f] = counts.get(f, 0.0)
-    feat["n_families_present"] = float(sum(1 for f in families if counts.get(f, 0) > 0))
-    feat["total_osmo_copies"] = float(sum(counts.get(f, 0.0) for f in families))
+    # schema 2: a group feature is the sum of its members' raw_count
+    groups = schema.get("family_groups") or {}
+    for g, members in groups.items():
+        feat[g] = float(sum(counts.get(m, 0.0) for m in members))
+    # the breadth summaries count every family the schema reads, group members included
+    read = list(families) + [m for members in groups.values() for m in members]
+    feat["n_families_present"] = float(sum(1 for f in read if counts.get(f, 0) > 0))
+    feat["total_osmo_copies"] = float(sum(counts.get(f, 0.0) for f in read))
     for s in system_names:
         p, n, _ = sysd.get(s, (0, 0, 0))
         feat[f"sys_{s}_present"] = float(p)

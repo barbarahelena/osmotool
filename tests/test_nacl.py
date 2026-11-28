@@ -126,6 +126,28 @@ def test_features_absent_family_is_zero_and_systems(tmp_path):
     assert f["systems_available"] == 1.0
 
 
+def test_features_family_group_is_the_sum_of_its_members(tmp_path):
+    write_annotate_output(tmp_path / "g", betl=2.0, ecta=1.0)
+    schema = {**make_schema(), "schema_version": 2, "families": ["teaA"],
+              "family_groups": {"bet_ect": ["betL", "ectA"]}}
+    f = nacl.features_from_annotate(tmp_path / "g.gene_counts.tsv",
+                                    tmp_path / "g.systems.tsv", schema)
+    assert f["bet_ect"] == 3.0
+    assert "betL" not in f and "ectA" not in f      # members are not features themselves
+    assert f["teaA"] == 0.0
+    # the breadth summaries count the group members as families
+    assert f["n_families_present"] == 2 and f["total_osmo_copies"] == 3.0
+
+
+def test_schema_without_family_groups_is_unchanged(tmp_path):
+    write_annotate_output(tmp_path / "g")
+    schema = make_schema()
+    a = nacl.features_from_annotate(tmp_path / "g.gene_counts.tsv", tmp_path / "g.systems.tsv", schema)
+    b = nacl.features_from_annotate(tmp_path / "g.gene_counts.tsv", tmp_path / "g.systems.tsv",
+                                    {**schema, "family_groups": {}})
+    assert a == b
+
+
 def test_features_without_systems_file(tmp_path):
     write_annotate_output(tmp_path / "g", systems=False)
     f = nacl.features_from_annotate(tmp_path / "g.gene_counts.tsv",
@@ -178,6 +200,9 @@ def test_schema_version_and_method_checked(tmp_path):
     (tmp_path / nacl.SCHEMA_FILE).write_text(json.dumps(s))
     with pytest.raises(ValueError, match="schema_version"):
         nacl.load_schema(tmp_path)
+    s["schema_version"] = 2            # family_groups
+    (tmp_path / nacl.SCHEMA_FILE).write_text(json.dumps(s))
+    assert nacl.load_schema(tmp_path)["schema_version"] == 2
     s["schema_version"], s["annotate"]["method"] = 1, "diamond"
     (tmp_path / nacl.SCHEMA_FILE).write_text(json.dumps(s))
     with pytest.raises(ValueError, match="annotate method"):
